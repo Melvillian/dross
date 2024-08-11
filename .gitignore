@@ -1,0 +1,39 @@
+# Rust-specific ignores
+/target/
+**/*.rs.bk
+
+# Ignore the .env file
+.env
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.o
+*.a
+*.so
+*.dylib
+
+# Rust profiling and debugging files
+*.profraw
+flamegraph.svg
+
+# Dependency directories
+vendor/
+
+# Generated documentation
+/doc/
+
+# Backup files
+*~
+
+# Ignore any local configuration files
+config.toml
+
