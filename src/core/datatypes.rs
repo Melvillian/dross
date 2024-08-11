@@ -1,10 +1,9 @@
 use chrono::{DateTime, Utc};
+use serde::{Serialize, Deserialize};
 
-#[derive(Debug, Clone)]
-
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Block {
     pub id: String,
-    pub raw_text: String,
     pub creation_date: DateTime<Utc>,
     pub creator: String,
     pub update_date: DateTime<Utc>,
@@ -14,13 +13,14 @@ pub struct Block {
     pub child_block_ids: Vec<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlockText {
     pub block: Block,
+    pub raw_text: String,
     pub formatting: Option<TextFormatting>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TextFormatting {
     pub bold: bool,
     pub italic: bool,
@@ -29,17 +29,8 @@ pub struct TextFormatting {
     pub font_family: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlockImage {
-
-
-
-
-
-
-
-
-
     pub block: Block,
     pub image_url: String,
 }
