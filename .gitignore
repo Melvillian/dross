@@ -24,6 +24,7 @@ Thumbs.db
 # Rust profiling and debugging files
 *.profraw
 flamegraph.svg
+logs.debug.txt
 
 # Dependency directories
 vendor/
