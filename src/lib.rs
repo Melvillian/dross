@@ -1,5 +1,3 @@
-
 pub mod core;
-pub mod notion;
 pub mod intelligence;
-
+pub mod notion;
