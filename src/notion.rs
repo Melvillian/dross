@@ -1,5 +1,6 @@
 use crate::core::datatypes::Block;
 use chrono::{Duration, Utc};
+use log::{debug, info};
 use nary_tree::Tree;
 use notion_client::{
     endpoints::{
@@ -19,6 +20,7 @@ use std::collections::VecDeque;
 pub struct Notion {
     client: Client,
 }
+use serde_json::json;
 
 impl Notion {
     pub fn new(token: String) -> Result<Self, NotionClientError> {
@@ -33,6 +35,8 @@ impl Notion {
         &self,
         dur: Duration,
     ) -> Result<Vec<Page>, NotionClientError> {
+        info!(target: "notion", "fetching pages edited in the last {} days", dur.num_days());
+
         let mut pages = Vec::new();
         let cutoff = Utc::now() - dur;
         let mut current_cursor: Option<String> = None;
@@ -108,18 +112,18 @@ impl Notion {
         let mut blocks: Vec<Tree<Block>> = Vec::new();
 
         for page in pages {
-            println!("Page: {}", page.url);
+            debug!(target: "notion", "Page URL: {}", page.url);
             // TODO: figure out how to handle these with error handling rather than silently ignoring
             // these are special pages I use to hold hundreds of other child pages, and so it
             // takes forever to load. It doesn't contain any useful info, so skip it.
             if page.url.contains("Place-To-Store-Pages")
                 || page.url.contains("Daily-Journal")
                 || page.url.contains("Personal-")
+                || page.url.contains("Roam-Import")
             {
                 continue;
             }
             let page_of_blocks: Tree<Block> = self.page_blocks(&page, dur).await?;
-            println!("done looping in page");
             blocks.push(page_of_blocks);
         }
         Ok(blocks)
@@ -148,26 +152,41 @@ impl Notion {
                     // we don't recurse on its children, we'll process
                     // them later
 
-                    let block_children_ids = self
-                        .retrieve_all_block_children(&block.id.clone().unwrap())
-                        .await?
-                        .into_iter()
-                        .map(|block| block.id.unwrap())
-                        .collect();
-                    relevant_blocks.push(Block::from_notion_block(block, page.id.clone(), block_children_ids));
+                    let block_children_ids = if block.has_children.is_some_and(|b| b) {
+                        self.retrieve_all_block_children(&block.id.clone().unwrap())
+                            .await?
+                            .into_iter()
+                            .map(|block| block.id.unwrap())
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+                    relevant_blocks.push(Block::from_notion_block(
+                        block,
+                        page.id.clone(),
+                        block_children_ids,
+                    ));
                 } else {
                     // keep recursing down the tree of children blocks
                     block_ids_to_process.push_front(block.id.unwrap());
                 }
             }
         }
+        debug!(target: "notion", "fetched {} relevant but possibly-empty Blocks from Page {}", relevant_blocks.len(), page.url);
+        debug!(target: "notion", "{:#?}", relevant_blocks);
+
+        // filter out empty blocks
+        let relevant_blocks: Vec<Block> = relevant_blocks
+            .into_iter()
+            .filter(|b| !b.is_empty())
+            .collect();
+        debug!(target: "notion", "fetched {} relevant Blocks from Page {}", relevant_blocks.len(), page.url);
+        debug!(target: "notion", "{:#?}", relevant_blocks);
 
         // now we have all of the page's blocks that were updated in the last `dur`
         // period of time. Now we will convert them to our core::Block representation,
         // and store them in an n-ary tree, where NotionBlocks that were
         // parents of NotionBlocks will be parents of the Blocks in this Tree
-
-        println!("relevant_blocks:\n{:#?}", relevant_blocks);
 
         let tree = Tree::new();
 

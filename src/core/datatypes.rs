@@ -1,6 +1,9 @@
+use core::num;
+
 use chrono::{DateTime, Utc};
 use notion_client::objects::block::{self, Block as NotionBlock, BlockType};
 use notion_client::objects::parent::Parent;
+use notion_client::objects::rich_text::RichText;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22,7 +25,11 @@ pub struct Block {
 }
 
 impl Block {
-    pub fn from_notion_block(notion_block: NotionBlock, page_id: String, child_block_ids: Vec<String>) -> Self {
+    pub fn from_notion_block(
+        notion_block: NotionBlock,
+        page_id: String,
+        child_block_ids: Vec<String>,
+    ) -> Self {
         Block {
             id: notion_block.id.unwrap_or_default(),
             page_id,
@@ -36,5 +43,31 @@ impl Block {
             }),
             child_block_ids,
         }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        match &self.block_type {
+            BlockType::Paragraph { paragraph } => self.rich_text_is_empty(&paragraph.rich_text),
+            BlockType::Heading1 { heading_1 } => self.rich_text_is_empty(&heading_1.rich_text),
+            BlockType::Heading2 { heading_2 } => self.rich_text_is_empty(&heading_2.rich_text),
+            BlockType::Heading3 { heading_3 } => self.rich_text_is_empty(&heading_3.rich_text),
+            BlockType::BulletedListItem { bulleted_list_item } => {
+                self.rich_text_is_empty(&bulleted_list_item.rich_text)
+            }
+            BlockType::NumberedListItem { numbered_list_item } => {
+                self.rich_text_is_empty(&numbered_list_item.rich_text)
+            }
+            BlockType::Toggle { toggle } => self.rich_text_is_empty(&toggle.rich_text),
+            // there might be some actually-empty blocks that we miss here by always
+            // returning false, but it's better to err on the safe side for now
+            _ => false,
+        }
+    }
+
+    fn rich_text_is_empty(&self, rich_text: &Vec<RichText>) -> bool {
+        rich_text.into_iter().all(|rt| match rt {
+            RichText::Text { text, .. } => text.content.is_empty(),
+            _ => true,
+        })
     }
 }
