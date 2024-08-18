@@ -37,8 +37,6 @@ impl Notion {
         let cutoff = Utc::now() - dur;
         let mut current_cursor: Option<String> = None;
 
-        // Set up request parameters
-        // TODO, cache this
         let mut req_builder = SearchByTitleRequestBuilder::default();
         req_builder.filter(Filter {
             value: notion_client::endpoints::search::title::request::FilterValue::Page,
@@ -77,7 +75,7 @@ impl Notion {
                 .collect::<Vec<Page>>();
             if current_pages.len() != res_len {
                 // TODO improve error handling
-                panic!("something other than a page was found in returned info");
+                panic!("something other than a page was found in returned info. res_len: {res_len} currentpages.len(): {}", current_pages.len());
             }
 
             // handle the case where a paginated response contains Pages older than `dur`
@@ -110,7 +108,18 @@ impl Notion {
         let mut blocks: Vec<Tree<Block>> = Vec::new();
 
         for page in pages {
+            println!("Page: {}", page.url);
+            // TODO: figure out how to handle these with error handling rather than silently ignoring
+            // these are special pages I use to hold hundreds of other child pages, and so it
+            // takes forever to load. It doesn't contain any useful info, so skip it.
+            if page.url.contains("Place-To-Store-Pages")
+                || page.url.contains("Daily-Journal")
+                || page.url.contains("Personal-")
+            {
+                continue;
+            }
             let page_of_blocks: Tree<Block> = self.page_blocks(&page, dur).await?;
+            println!("done looping in page");
             blocks.push(page_of_blocks);
         }
         Ok(blocks)
@@ -145,7 +154,7 @@ impl Notion {
                         .into_iter()
                         .map(|block| block.id.unwrap())
                         .collect();
-                    relevant_blocks.push(Block::from_notion_block(block, block_children_ids));
+                    relevant_blocks.push(Block::from_notion_block(block, page.id.clone(), block_children_ids));
                 } else {
                     // keep recursing down the tree of children blocks
                     block_ids_to_process.push_front(block.id.unwrap());
@@ -162,7 +171,7 @@ impl Notion {
 
         let tree = Tree::new();
 
-        for notion_block in relevant_blocks {}
+        // for notion_block in relevant_blocks {}
         Ok(tree)
     }
 

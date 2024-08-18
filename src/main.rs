@@ -14,4 +14,7 @@ async fn main() {
     let notion = Notion::new(notion_token).unwrap();
 
     let retro_blocks = notion.get_last_edited_pages(dur).await.unwrap();
+    let retro_blocks = notion.pages_to_blocks(retro_blocks, dur).await.unwrap();
+    println!("we're finished!");
+    return;
 }

@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Block {
     pub id: String,
+    pub page_id: String,
     // for now we use notion_client's BlockTypes,
     // but when we expand to more notetaking sources
     // (e.g. Obsidian, Evernote, etc.) we'll need to
@@ -21,9 +22,10 @@ pub struct Block {
 }
 
 impl Block {
-    pub fn from_notion_block(notion_block: NotionBlock, child_block_ids: Vec<String>) -> Self {
+    pub fn from_notion_block(notion_block: NotionBlock, page_id: String, child_block_ids: Vec<String>) -> Self {
         Block {
             id: notion_block.id.unwrap_or_default(),
+            page_id,
             // this is where the actual Block data is
             block_type: notion_block.block_type,
             creation_date: notion_block.created_time.unwrap_or_default(),
