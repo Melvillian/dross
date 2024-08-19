@@ -1,7 +1,7 @@
 use crate::core::datatypes::Block;
 use chrono::{Duration, Utc};
 use log::{debug, info};
-use nary_tree::Tree;
+use nary_tree::{NodeMut, Tree, TreeBuilder};
 use notion_client::{
     endpoints::{
         search::title::{
@@ -10,12 +10,15 @@ use notion_client::{
         },
         Client,
     },
-    objects::block::Block as NotionBlock,
-    objects::page::Page,
+    objects::{
+        block::{self, Block as NotionBlock},
+        page::Page,
+    },
     NotionClientError,
 };
 use reqwest::ClientBuilder;
-use std::collections::VecDeque;
+use std::{borrow::BorrowMut, rc::Rc};
+use std::{cell::RefCell, collections::VecDeque};
 
 pub struct Notion {
     client: Client,
@@ -141,19 +144,18 @@ impl Notion {
         // simple inefficient solution right now: go through fetching all the
         // blocks that were edited with `dur`, and then from their build up the Vec<Block> using
         // the contents of those NotionBlocks
-        block_ids_to_process.push_front(page.id.clone());
+        block_ids_to_process.push_back(page.id.clone());
 
-        while let Some(block_id) = block_ids_to_process.pop_back() {
-            let block_siblings = self.retrieve_all_block_children(&block_id).await?;
+        while let Some(block_id) = block_ids_to_process.pop_front() {
+            let block_siblings = self.retrieve_all_notion_block_children(&block_id).await?;
 
             for block in block_siblings {
-                let block_is_within_duration = block.last_edited_time.unwrap() > cutoff;
-                if block_is_within_duration {
+                if block.last_edited_time.unwrap() > cutoff {
                     // we don't recurse on its children, we'll process
                     // them later
 
                     let block_children_ids = if block.has_children.is_some_and(|b| b) {
-                        self.retrieve_all_block_children(&block.id.clone().unwrap())
+                        self.retrieve_all_notion_block_children(&block.id.clone().unwrap())
                             .await?
                             .into_iter()
                             .map(|block| block.id.unwrap())
@@ -168,7 +170,7 @@ impl Notion {
                     ));
                 } else {
                     // keep recursing down the tree of children blocks
-                    block_ids_to_process.push_front(block.id.unwrap());
+                    block_ids_to_process.push_back(block.id.unwrap());
                 }
             }
         }
@@ -183,18 +185,57 @@ impl Notion {
         debug!(target: "notion", "fetched {} relevant Blocks from Page {}", relevant_blocks.len(), page.url);
         debug!(target: "notion", "{:#?}", relevant_blocks);
 
-        // now we have all of the page's blocks that were updated in the last `dur`
-        // period of time. Now we will convert them to our core::Block representation,
-        // and store them in an n-ary tree, where NotionBlocks that were
-        // parents of NotionBlocks will be parents of the Blocks in this Tree
+        // At last we have all of the page's children Blocks that were updated in the last `dur`
+        // period of time and are non-empty. Now we will expand out these Blocks' children
+        // recursively, and use that to write a markdown String that represents all of the
+        // relevant Block content for this Page
 
-        let tree = Tree::new();
+        // Page -> Block
+        let page_notion_block = self.client.blocks.retrieve_a_block(&page.id).await?;
+        let page_children_block_ids = self.retrieve_all_notion_block_children(&page.id).await?;
+        let page_block = Block::from_notion_block(
+            page_notion_block,
+            page.id.clone(),
+            page_children_block_ids
+                .into_iter()
+                .map(|block| block.id.unwrap())
+                .collect(),
+        );
 
-        // for notion_block in relevant_blocks {}
+        // the Page these blocks comes from is always the root of the tree, and the nested
+        // Block children are children of the tree root and siblings of each other
+        // (regardless of how nested they were in the original Notion Page)
+
+        let mut tree = TreeBuilder::new().with_root(page_block).build();
+        let tree_root = Rc::new(RefCell::new(tree.root_mut().unwrap()));
+        let mut blocks_to_add_to_tree: VecDeque<BlockAndParentTreeNode> = VecDeque::from_iter(
+            relevant_blocks
+                .into_iter()
+                .map(|b| BlockAndParentTreeNode::new(b, tree_root.clone())),
+        );
+
+        while let Some(BlockAndParentTreeNode { block, parent_node }) =
+            blocks_to_add_to_tree.pop_front()
+        {
+            let mut parent_node = parent_node.borrow_mut();
+            let this_block_node = parent_node.append(block.clone());
+
+            let block_children = if !block.child_block_ids.is_empty() {
+                self.retrieve_all_block_children(block.page_id, &block.id).await?
+            } else {
+                Vec::new()
+            };
+
+            blocks_to_add_to_tree.extend(
+                block_children
+                    .into_iter()
+                    .map(|b: Block| BlockAndParentTreeNode::new(b, Rc::new(RefCell::new(this_block_node.clone())))),
+            );
+        }
         Ok(tree)
     }
 
-    async fn retrieve_all_block_children(
+    async fn retrieve_all_notion_block_children(
         &self,
         block_id: &str,
     ) -> Result<Vec<NotionBlock>, NotionClientError> {
@@ -217,5 +258,43 @@ impl Notion {
         }
 
         Ok(children_blocks)
+    }
+
+    async fn retrieve_all_block_children(
+        &self,
+        page_id: String,
+        block_id: &str,
+    ) -> Result<Vec<Block>, NotionClientError> {
+        let mut blocks: Vec<Block> = Vec::new();
+
+        let notion_blocks: Vec<NotionBlock> = self.retrieve_all_notion_block_children(block_id).await?;
+        for block in notion_blocks {
+            let block_children_ids = if block.has_children.is_some_and(|b| b) {
+                self.retrieve_all_notion_block_children(&block.id.clone().unwrap())
+                    .await?
+                    .into_iter()
+                    .map(|block| block.id.unwrap())
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            blocks.push(Block::from_notion_block(block, page_id.clone(), block_children_ids));
+        }
+        
+        Ok(blocks)
+    }
+}
+
+struct BlockAndParentTreeNode<'a> {
+    block: Block,
+    parent_node: Rc<RefCell<NodeMut<'a, Block>>>,
+}
+
+impl BlockAndParentTreeNode<'_> {
+    fn new<'a>(
+        block: Block,
+        parent_node: Rc<RefCell<NodeMut<'a, Block>>>,
+    ) -> BlockAndParentTreeNode<'a> {
+        BlockAndParentTreeNode { block, parent_node }
     }
 }
