@@ -1,7 +1,6 @@
 use crate::core::datatypes::Block;
 use chrono::{Duration, Utc};
-use log::{debug, info};
-use nary_tree::{NodeMut, Tree, TreeBuilder};
+use log::debug;
 use notion_client::{
     endpoints::{
         search::title::{
@@ -11,19 +10,17 @@ use notion_client::{
         Client,
     },
     objects::{
-        block::{self, Block as NotionBlock},
+        block::Block as NotionBlock,
         page::Page,
     },
     NotionClientError,
 };
 use reqwest::ClientBuilder;
-use std::{borrow::BorrowMut, rc::Rc};
-use std::{cell::RefCell, collections::VecDeque};
+use std::collections::VecDeque;
 
 pub struct Notion {
     client: Client,
 }
-use serde_json::json;
 
 impl Notion {
     pub fn new(token: String) -> Result<Self, NotionClientError> {
@@ -38,7 +35,6 @@ impl Notion {
         &self,
         dur: Duration,
     ) -> Result<Vec<Page>, NotionClientError> {
-        info!(target: "notion", "fetching pages edited in the last {} days", dur.num_days());
 
         let mut pages = Vec::new();
         let cutoff = Utc::now() - dur;
@@ -111,8 +107,8 @@ impl Notion {
         &self,
         pages: Vec<Page>,
         dur: Duration,
-    ) -> Result<Vec<Tree<Block>>, NotionClientError> {
-        let mut blocks: Vec<Tree<Block>> = Vec::new();
+    ) -> Result<Vec<String>, NotionClientError> {
+        let mut prompt_notes: Vec<String> = Vec::new();
 
         for page in pages {
             debug!(target: "notion", "Page URL: {}", page.url);
@@ -126,20 +122,21 @@ impl Notion {
             {
                 continue;
             }
-            let page_of_blocks: Tree<Block> = self.page_blocks(&page, dur).await?;
-            blocks.push(page_of_blocks);
+            let root_blocks = self.page_blocks(&page, dur).await?;
+            let page_markdown = self.blocks_to_markdown(&page, root_blocks).await?;
+            prompt_notes.push(page_markdown);
         }
-        Ok(blocks)
+        Ok(prompt_notes)
     }
 
     pub async fn page_blocks(
         &self,
         page: &Page,
         dur: Duration,
-    ) -> Result<Tree<Block>, NotionClientError> {
+    ) -> Result<Vec<Block>, NotionClientError> {
         let cutoff = Utc::now() - dur;
         let mut block_ids_to_process = VecDeque::new();
-        let mut relevant_blocks: Vec<Block> = Vec::new();
+        let mut root_blocks: Vec<Block> = Vec::new();
 
         // simple inefficient solution right now: go through fetching all the
         // blocks that were edited with `dur`, and then from their build up the Vec<Block> using
@@ -163,7 +160,7 @@ impl Notion {
                     } else {
                         Vec::new()
                     };
-                    relevant_blocks.push(Block::from_notion_block(
+                    root_blocks.push(Block::from_notion_block(
                         block,
                         page.id.clone(),
                         block_children_ids,
@@ -174,65 +171,42 @@ impl Notion {
                 }
             }
         }
-        debug!(target: "notion", "fetched {} relevant but possibly-empty Blocks from Page {}", relevant_blocks.len(), page.url);
-        debug!(target: "notion", "{:#?}", relevant_blocks);
+        debug!(target: "notion", "fetched {} relevant but possibly-empty Blocks from Page {}", root_blocks.len(), page.url);
+        debug!(target: "notion", "{:#?}", root_blocks);
 
         // filter out empty blocks
-        let relevant_blocks: Vec<Block> = relevant_blocks
+        let relevant_blocks: Vec<Block> = root_blocks
             .into_iter()
             .filter(|b| !b.is_empty())
             .collect();
         debug!(target: "notion", "fetched {} relevant Blocks from Page {}", relevant_blocks.len(), page.url);
         debug!(target: "notion", "{:#?}", relevant_blocks);
 
+        Ok(relevant_blocks)
+
+    }
+
+    pub async fn blocks_to_markdown(
+        &self,
+        page: &Page,
+        root_blocks: Vec<Block>,
+    ) -> Result<String, NotionClientError> {
+        
         // At last we have all of the page's children Blocks that were updated in the last `dur`
         // period of time and are non-empty. Now we will expand out these Blocks' children
         // recursively, and use that to write a markdown String that represents all of the
         // relevant Block content for this Page
 
-        // Page -> Block
-        let page_notion_block = self.client.blocks.retrieve_a_block(&page.id).await?;
-        let page_children_block_ids = self.retrieve_all_notion_block_children(&page.id).await?;
-        let page_block = Block::from_notion_block(
-            page_notion_block,
-            page.id.clone(),
-            page_children_block_ids
-                .into_iter()
-                .map(|block| block.id.unwrap())
-                .collect(),
-        );
+        let page_name = Notion::get_title_of_page(page);
+        let mut page_name_line = "Page Name: ".to_string() + &page_name;
+        page_name_line.push('\n');
+        let mut page_markdown = page_name_line;
 
-        // the Page these blocks comes from is always the root of the tree, and the nested
-        // Block children are children of the tree root and siblings of each other
-        // (regardless of how nested they were in the original Notion Page)
+        self.build_page_markdown(root_blocks, &mut page_markdown, 1).await?;
 
-        let mut tree = TreeBuilder::new().with_root(page_block).build();
-        let tree_root = Rc::new(RefCell::new(tree.root_mut().unwrap()));
-        let mut blocks_to_add_to_tree: VecDeque<BlockAndParentTreeNode> = VecDeque::from_iter(
-            relevant_blocks
-                .into_iter()
-                .map(|b| BlockAndParentTreeNode::new(b, tree_root.clone())),
-        );
+        debug!("page_markdown:\n{}", page_markdown);
 
-        while let Some(BlockAndParentTreeNode { block, parent_node }) =
-            blocks_to_add_to_tree.pop_front()
-        {
-            let mut parent_node = parent_node.borrow_mut();
-            let this_block_node = parent_node.append(block.clone());
-
-            let block_children = if !block.child_block_ids.is_empty() {
-                self.retrieve_all_block_children(block.page_id, &block.id).await?
-            } else {
-                Vec::new()
-            };
-
-            blocks_to_add_to_tree.extend(
-                block_children
-                    .into_iter()
-                    .map(|b: Block| BlockAndParentTreeNode::new(b, Rc::new(RefCell::new(this_block_node.clone())))),
-            );
-        }
-        Ok(tree)
+        Ok(page_markdown)
     }
 
     async fn retrieve_all_notion_block_children(
@@ -283,18 +257,36 @@ impl Notion {
         
         Ok(blocks)
     }
-}
 
-struct BlockAndParentTreeNode<'a> {
-    block: Block,
-    parent_node: Rc<RefCell<NodeMut<'a, Block>>>,
-}
+    async fn build_page_markdown(&self, blocks: Vec<Block>, page_markdown: &mut String, num_tabs: usize) -> Result<(), NotionClientError> {
+        // TODO, figure out how to handle images
+        if blocks.is_empty() {
+            return Ok(());
+        }
+        for block in blocks {
+            // add this Block's contribution to the Page's markdown string
+            let mut line = "\t".repeat(num_tabs);
+            line.push_str(&block.get_text());
+            page_markdown.push_str(&line);
+            page_markdown.push('\n');
 
-impl BlockAndParentTreeNode<'_> {
-    fn new<'a>(
-        block: Block,
-        parent_node: Rc<RefCell<NodeMut<'a, Block>>>,
-    ) -> BlockAndParentTreeNode<'a> {
-        BlockAndParentTreeNode { block, parent_node }
+            let block_children = self.retrieve_all_block_children(block.page_id, &block.id).await?;
+            // note, we have the Box::pin so that we can call .await in a recursive function
+            Box::pin(self.build_page_markdown(block_children, page_markdown, num_tabs + 1)).await?;
+        }
+
+        Ok(())
+    }
+
+    /// This is a hack to get the page name, but I don't know if it's very robust
+    fn get_title_of_page(page: &Page) -> String {
+        let url_fragment = page.url.split("/").last();
+        match url_fragment {
+            Some(name) => {
+                let parts = name.split("-").collect::<Vec<&str>>();
+                parts[..parts.len() - 1].join(" ")
+            },
+            None => "Unknown Page Title".to_string()
+        }
     }
 }
