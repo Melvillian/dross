@@ -23,7 +23,7 @@ async fn main() {
         match notion.get_page_root_blocks(&page, dur).await {
             Some(block_roots) => {
                 pages_and_block_roots.push((page, block_roots.unwrap()));
-            },
+            }
             None => {
                 continue;
             }
@@ -32,7 +32,12 @@ async fn main() {
 
     let mut prompt_info = Vec::new();
     for page_and_block_roots in pages_and_block_roots {
-        prompt_info.push(notion.page_and_blocks_to_tree(page_and_block_roots).await.unwrap())
+        prompt_info.push(
+            notion
+                .page_and_blocks_to_tree(page_and_block_roots)
+                .await
+                .unwrap(),
+        )
     }
     info!(target: "notion", "notion page ingestion successful");
     return;

@@ -1,5 +1,7 @@
 use crate::core::datatypes::{Block, Page};
 use chrono::{Duration, Utc};
+use dendron::{Node, Tree};
+use futures::future::{self, try_join_all};
 use log::debug;
 use notion_client::{
     endpoints::{
@@ -11,15 +13,13 @@ use notion_client::{
     },
     objects::{
         block::{Block as NotionBlock, BlockType, ParagraphValue},
-        page::{Page as NotionPage},
-        rich_text::{RichText, Text, Annotations, TextColor},
+        page::Page as NotionPage,
+        rich_text::{Annotations, RichText, Text, TextColor},
     },
     NotionClientError,
 };
 use reqwest::ClientBuilder;
 use std::collections::VecDeque;
-use dendron::{Tree, Node};
-use futures::future::{self, try_join_all};
 
 pub struct Notion {
     client: Client,
@@ -38,7 +38,6 @@ impl Notion {
         &self,
         dur: Duration,
     ) -> Result<Vec<Page>, NotionClientError> {
-
         let mut pages: Vec<Page> = Vec::new();
         let cutoff = Utc::now() - dur;
         let mut current_cursor: Option<String> = None;
@@ -93,9 +92,15 @@ impl Notion {
                 current_notion_pages = current_notion_pages.split_at(index).0.to_vec();
             }
 
-            pages.append(&mut try_join_all(current_notion_pages.into_iter().map(|notion_page| {
-                self.from_notion_page(notion_page)
-            })).await.unwrap());
+            pages.append(
+                &mut try_join_all(
+                    current_notion_pages
+                        .into_iter()
+                        .map(|notion_page| self.from_notion_page(notion_page)),
+                )
+                .await
+                .unwrap(),
+            );
 
             if !res.has_more || cutoff_index.is_some() {
                 break;
@@ -105,12 +110,11 @@ impl Notion {
         Ok(pages)
     }
 
-    pub async fn get_page_root_blocks   (
+    pub async fn get_page_root_blocks(
         &self,
         page: &Page,
         dur: Duration,
     ) -> Option<Result<Vec<Block>, NotionClientError>> {
-
         debug!(target: "notion", "Page URL: {}", page.url);
         // TODO: figure out how to handle these with error handling rather than silently ignoring
         // these are special pages I use to hold hundreds of other child pages, and so it
@@ -120,7 +124,7 @@ impl Notion {
             || page.url.contains("Personal-")
             || page.url.contains("Roam-Import")
         {
-            return  None;
+            return None;
         }
         Some(self.get_page_root_blocks_inner(page, dur).await)
     }
@@ -170,15 +174,12 @@ impl Notion {
         debug!(target: "notion", "{:#?}", root_blocks);
 
         // filter out empty blocks
-        let relevant_blocks: Vec<Block> = root_blocks
-            .into_iter()
-            .filter(|b| !b.is_empty())
-            .collect();
+        let relevant_blocks: Vec<Block> =
+            root_blocks.into_iter().filter(|b| !b.is_empty()).collect();
         debug!(target: "notion", "fetched {} relevant Blocks from Page {}", relevant_blocks.len(), page.url);
         debug!(target: "notion", "{:#?}", relevant_blocks);
 
         Ok(relevant_blocks)
-
     }
 
     async fn retrieve_all_notion_block_children(
@@ -213,7 +214,10 @@ impl Notion {
     ) -> Result<Vec<Block>, NotionClientError> {
         let mut blocks: Vec<Block> = Vec::new();
 
-        let notion_blocks: Vec<NotionBlock> = self.retrieve_all_notion_block_children(block_id).await?.into_iter();
+        let notion_blocks: Vec<NotionBlock> = self
+            .retrieve_all_notion_block_children(block_id)
+            .await?
+            .into_iter();
         for block in notion_blocks {
             let block_children_ids = if block.has_children.is_some_and(|b| b) {
                 self.retrieve_all_notion_block_children(&block.id.clone().unwrap())
@@ -224,17 +228,21 @@ impl Notion {
             } else {
                 Vec::new()
             };
-            blocks.push(Block::from_notion_block(block, page_id.clone(), block_children_ids));
+            blocks.push(Block::from_notion_block(
+                block,
+                page_id.clone(),
+                block_children_ids,
+            ));
         }
-        
+
         Ok(blocks)
     }
 
     pub async fn page_and_blocks_to_tree(
         &self,
-        (page, root_blocks): (Page, Vec<Block>)
+        (page, root_blocks): (Page, Vec<Block>),
     ) -> Result<Tree<Block>, NotionClientError> {
-        
+
         // At last we have all of the page's children Blocks that were updated in the last `dur`
         // period of time and are non-empty. Now we will expand out these Blocks' children
         // recursively, and use that to write a markdown String that represents all of the
@@ -252,7 +260,12 @@ impl Notion {
         // Ok(page_markdown)
     }
 
-    async fn build_page_markdown(&self, blocks: Vec<Block>, page_markdown: &mut String, num_tabs: usize) -> Result<(), NotionClientError> {
+    async fn build_page_markdown(
+        &self,
+        blocks: Vec<Block>,
+        page_markdown: &mut String,
+        num_tabs: usize,
+    ) -> Result<(), NotionClientError> {
         // TODO, figure out how to handle images
         if blocks.is_empty() {
             return Ok(());
@@ -264,7 +277,9 @@ impl Notion {
             page_markdown.push_str(&line);
             page_markdown.push('\n');
 
-            let block_children = self.retrieve_all_block_children(block.page_id, &block.id).await?;
+            let block_children = self
+                .retrieve_all_block_children(block.page_id, &block.id)
+                .await?;
             // note, we have the Box::pin so that we can call .await in a recursive function
             Box::pin(self.build_page_markdown(block_children, page_markdown, num_tabs + 1)).await?;
         }
@@ -279,18 +294,20 @@ impl Notion {
             Some(name) => {
                 let parts = name.split("-").collect::<Vec<&str>>();
                 parts[..parts.len() - 1].join(" ")
-            },
-            None => "Unknown Page Title".to_string()
+            }
+            None => "Unknown Page Title".to_string(),
         }
     }
 
     async fn from_notion_page(&self, notion_page: NotionPage) -> Result<Page, NotionClientError> {
         Ok(Page {
             id: notion_page.id.clone(),
-        url: notion_page.url.clone(),
-        creation_date: notion_page.created_time,
-        update_date: notion_page.last_edited_time,
-        child_blocks: self.retrieve_all_block_children(notion_page.id.clone(), &notion_page.id).await?,
+            url: notion_page.url.clone(),
+            creation_date: notion_page.created_time,
+            update_date: notion_page.last_edited_time,
+            child_blocks: self
+                .retrieve_all_block_children(notion_page.id.clone(), &notion_page.id)
+                .await?,
         })
     }
 }
