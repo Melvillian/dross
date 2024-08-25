@@ -13,7 +13,7 @@ use notion_client::{
     },
     objects::{
         block::{Block as NotionBlock, BlockType, ParagraphValue},
-        page::Page as NotionPage,
+        page::{self, Page as NotionPage},
         rich_text::{Annotations, RichText, Text, TextColor},
     },
     NotionClientError,
@@ -144,7 +144,7 @@ impl Notion {
 
         while let Some(block_id) = block_ids_to_process.pop_front() {
             let block_siblings = self
-                .retrieve_all_block_children(page.id.clone(), &block_id)
+                .retrieve_all_block_children(&page.id, &block_id)
                 .await?;
 
             for block in block_siblings {
@@ -172,7 +172,7 @@ impl Notion {
 
     async fn retrieve_all_block_children(
         &self,
-        page_id: String,
+        page_id: &str,
         block_id: &str,
     ) -> Result<Vec<Block>, NotionClientError> {
         let mut children_blocks: Vec<Block> = Vec::new();
@@ -189,7 +189,7 @@ impl Notion {
                 &mut res
                     .results
                     .into_iter()
-                    .map(|block| Block::from_notion_block(block, page_id.clone()))
+                    .map(|block| Block::from_notion_block(block, page_id.to_string()))
                     .collect(),
             );
 
@@ -202,17 +202,39 @@ impl Notion {
         Ok(children_blocks)
     }
 
-    pub async fn block_roots_to_tree(
+    pub async fn grow_the_roots(
         &self,
         block_roots: Vec<Block>,
     ) -> Result<Vec<Tree<Block>>, NotionClientError> {
-
         // At last we have all of the page's children Blocks that were updated in the last `dur`
         // period of time and are non-empty. Now we will expand out these Blocks' children
         // recursively, and use that to create a tree of each Page's structure
-        for root in block_roots {
+        let mut blossomed_roots = Vec::new();
+        for block in block_roots {
+            let root = Node::new_tree(block);
+            blossomed_roots.push(root.tree());
+            let mut queue = VecDeque::new();
 
+            queue.push_back(root);
+            while let Some(node) = queue.pop_front() {
+                let grant = node.tree().grant_hierarchy_edit().unwrap();
+
+                // TODO: figure out how to make this more efficient by not copying every block value
+                let page_id = node.borrow_data().page_id.clone();
+                let block_id = node.borrow_data().id.clone();
+                let has_children = node.borrow_data().has_children;
+
+                if has_children {
+                    let children = self.retrieve_all_block_children(&page_id, &block_id).await?;
+                    for child in children {
+                        node.create_as_last_child(&grant, child);
+                        queue.push_back(node.last_child().unwrap());
+                    }
+                }
+            }
         }
+
+        Ok(blossomed_roots)
     }
 
     async fn build_page_markdown(
@@ -233,7 +255,7 @@ impl Notion {
             page_markdown.push('\n');
 
             let block_children = self
-                .retrieve_all_block_children(block.page_id, &block.id)
+                .retrieve_all_block_children(&block.page_id, &block.id)
                 .await?;
             // note, we have the Box::pin so that we can call .await in a recursive function
             Box::pin(self.build_page_markdown(block_children, page_markdown, num_tabs + 1)).await?;
@@ -259,7 +281,7 @@ impl Notion {
             creation_date: notion_page.created_time,
             update_date: notion_page.last_edited_time,
             child_blocks: self
-                .retrieve_all_block_children(notion_page.id.clone(), &notion_page.id)
+                .retrieve_all_block_children(&notion_page.id, &notion_page.id)
                 .await?,
         })
     }

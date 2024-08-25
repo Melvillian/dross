@@ -32,19 +32,14 @@ async fn main() {
 
     let mut prompt_info = Vec::new();
     for (page, block_roots) in pages_and_block_roots {
-        let trees = notion.block_roots_to_tree(block_roots).await?;
+        let trees = notion.grow_the_roots(block_roots).await.unwrap();
 
         prompt_info.push(
             format!(
                 "Page Title: {}\n{:?}",
                 page.url,
                 trees
-                    .into_iter()
-                    .map(|tree| tree.debug_pretty_print())
-                    .collect()
-                    .join("\n")
-            )
-            .as_str(),
+            ),
         );
     }
     let prompt_info = prompt_info.join("\n\n");
