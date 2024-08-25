@@ -110,7 +110,7 @@ impl Notion {
         Ok(pages)
     }
 
-    pub async fn get_page_root_blocks(
+    pub async fn get_page_block_roots(
         &self,
         page: &Page,
         dur: Duration,
@@ -119,84 +119,79 @@ impl Notion {
         // TODO: figure out how to handle these with error handling rather than silently ignoring
         // these are special pages I use to hold hundreds of other child pages, and so it
         // takes forever to load. It doesn't contain any useful info, so skip it.
-        if page.url.contains("Place-To-Store-Pages")
-            || page.url.contains("Daily-Journal")
+        if page.url.contains("Place-To-Store-Pages-")
+            || page.url.contains("Daily-Journal-")
             || page.url.contains("Personal-")
-            || page.url.contains("Roam-Import")
+            || page.url.contains("Roam-Import-")
         {
             return None;
         }
-        Some(self.get_page_root_blocks_inner(page, dur).await)
+        Some(self.get_page_block_roots_inner(page, dur).await)
     }
 
-    async fn get_page_root_blocks_inner(
+    async fn get_page_block_roots_inner(
         &self,
         page: &Page,
         dur: Duration,
     ) -> Result<Vec<Block>, NotionClientError> {
         let cutoff = Utc::now() - dur;
         let mut block_ids_to_process = VecDeque::new();
-        let mut root_blocks: Vec<Block> = Vec::new();
+        let mut block_roots: Vec<Block> = Vec::new();
 
         // simple inefficient solution right now: go through fetching all the
         // blocks that were edited with `dur`
         block_ids_to_process.push_back(page.id.clone());
 
         while let Some(block_id) = block_ids_to_process.pop_front() {
-            let block_siblings = self.retrieve_all_notion_block_children(&block_id).await?;
+            let block_siblings = self
+                .retrieve_all_block_children(page.id.clone(), &block_id)
+                .await?;
 
             for block in block_siblings {
-                if block.last_edited_time.unwrap() > cutoff {
+                if block.update_date > cutoff {
                     // we don't recurse on its children, we'll process
                     // them later
-
-                    let block_children_ids = if block.has_children.is_some_and(|b| b) {
-                        self.retrieve_all_notion_block_children(&block.id.clone().unwrap())
-                            .await?
-                            .into_iter()
-                            .map(|block| block.id.unwrap())
-                            .collect()
-                    } else {
-                        Vec::new()
-                    };
-                    root_blocks.push(Block::from_notion_block(
-                        block,
-                        page.id.clone(),
-                        block_children_ids,
-                    ));
+                    block_roots.push(block);
                 } else {
                     // keep recursing down the tree of children blocks
-                    block_ids_to_process.push_back(block.id.unwrap());
+                    block_ids_to_process.push_back(block.id);
                 }
             }
         }
-        debug!(target: "notion", "fetched {} relevant but possibly-empty Blocks from Page {}", root_blocks.len(), page.url);
-        debug!(target: "notion", "{:#?}", root_blocks);
+        debug!(target: "notion", "fetched {} relevant but possibly-empty Blocks from Page {}", block_roots.len(), page.url);
+        debug!(target: "notion", "{:#?}", block_roots);
 
         // filter out empty blocks
         let relevant_blocks: Vec<Block> =
-            root_blocks.into_iter().filter(|b| !b.is_empty()).collect();
+            block_roots.into_iter().filter(|b| !b.is_empty()).collect();
         debug!(target: "notion", "fetched {} relevant Blocks from Page {}", relevant_blocks.len(), page.url);
         debug!(target: "notion", "{:#?}", relevant_blocks);
 
         Ok(relevant_blocks)
     }
 
-    async fn retrieve_all_notion_block_children(
+    async fn retrieve_all_block_children(
         &self,
+        page_id: String,
         block_id: &str,
-    ) -> Result<Vec<NotionBlock>, NotionClientError> {
-        let mut children_blocks: Vec<NotionBlock> = Vec::new();
+    ) -> Result<Vec<Block>, NotionClientError> {
+        let mut children_blocks: Vec<Block> = Vec::new();
         let mut current_cursor: Option<String> = None;
 
         loop {
-            let mut res = self
+            let res = self
                 .client
                 .blocks
                 .retrieve_block_children(block_id, current_cursor.as_deref(), Some(100))
                 .await?;
 
-            children_blocks.append(&mut res.results);
+            children_blocks.append(
+                &mut res
+                    .results
+                    .into_iter()
+                    .map(|block| Block::from_notion_block(block, page_id.clone()))
+                    .collect(),
+            );
 
             if !res.has_more {
                 break;
@@ -207,57 +202,17 @@ impl Notion {
         Ok(children_blocks)
     }
 
-    async fn retrieve_all_block_children(
+    pub async fn block_roots_to_tree(
         &self,
-        page_id: String,
-        block_id: &str,
-    ) -> Result<Vec<Block>, NotionClientError> {
-        let mut blocks: Vec<Block> = Vec::new();
-
-        let notion_blocks: Vec<NotionBlock> = self
-            .retrieve_all_notion_block_children(block_id)
-            .await?
-            .into_iter();
-        for block in notion_blocks {
-            let block_children_ids = if block.has_children.is_some_and(|b| b) {
-                self.retrieve_all_notion_block_children(&block.id.clone().unwrap())
-                    .await?
-                    .into_iter()
-                    .map(|block| block.id.unwrap())
-                    .collect()
-            } else {
-                Vec::new()
-            };
-            blocks.push(Block::from_notion_block(
-                block,
-                page_id.clone(),
-                block_children_ids,
-            ));
-        }
-
-        Ok(blocks)
-    }
-
-    pub async fn page_and_blocks_to_tree(
-        &self,
-        (page, root_blocks): (Page, Vec<Block>),
-    ) -> Result<Tree<Block>, NotionClientError> {
+        block_roots: Vec<Block>,
+    ) -> Result<Vec<Tree<Block>>, NotionClientError> {
 
         // At last we have all of the page's children Blocks that were updated in the last `dur`
         // period of time and are non-empty. Now we will expand out these Blocks' children
-        // recursively, and use that to write a markdown String that represents all of the
-        // relevant Block content for this Page
+        // recursively, and use that to create a tree of each Page's structure
+        for root in block_roots {
 
-        // let page_name = Notion::get_title_of_page(&page);
-        // let mut page_name_line = "Page Name: ".to_string() + &page_name;
-        // page_name_line.push('\n');
-        // let mut page_markdown = page_name_line;
-
-        // self.build_page_markdown(root_blocks, &mut page_markdown, 1).await?;
-
-        // debug!("page_markdown:\n{}", page_markdown);
-
-        // Ok(page_markdown)
+        }
     }
 
     async fn build_page_markdown(
@@ -287,21 +242,19 @@ impl Notion {
         Ok(())
     }
 
-    /// This is a hack to get the page name, but I don't know if it's very robust
-    fn get_title_of_page(page: &Page) -> String {
-        let url_fragment = page.url.split("/").last();
-        match url_fragment {
-            Some(name) => {
-                let parts = name.split("-").collect::<Vec<&str>>();
-                parts[..parts.len() - 1].join(" ")
-            }
-            None => "Unknown Page Title".to_string(),
-        }
-    }
-
     async fn from_notion_page(&self, notion_page: NotionPage) -> Result<Page, NotionClientError> {
         Ok(Page {
             id: notion_page.id.clone(),
+            // convert https://www.notion.so/August-19-2024-651d530e07a14f9c97b4084614c5049b -> August 19 2024
+            // Note: yes, this is kinda hacky and won't work for every page title, but it's good enough
+            // for getting the gist of what the page is called
+            title: match notion_page.url.split("/").last() {
+                Some(name) => {
+                    let parts = name.split("-").collect::<Vec<&str>>();
+                    parts.split_at(parts.len() - 1).0.join(" ")
+                }
+                None => "Unknown Page Title".to_string(),
+            },
             url: notion_page.url.clone(),
             creation_date: notion_page.created_time,
             update_date: notion_page.last_edited_time,

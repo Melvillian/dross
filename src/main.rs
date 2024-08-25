@@ -20,7 +20,7 @@ async fn main() {
     info!(target: "notion", "retrieved {} Pages edited in the last {} days", pages_edited_within_dur.len(), dur.num_days());
     let mut pages_and_block_roots = Vec::new();
     for page in pages_edited_within_dur {
-        match notion.get_page_root_blocks(&page, dur).await {
+        match notion.get_page_block_roots(&page, dur).await {
             Some(block_roots) => {
                 pages_and_block_roots.push((page, block_roots.unwrap()));
             }
@@ -31,14 +31,25 @@ async fn main() {
     }
 
     let mut prompt_info = Vec::new();
-    for page_and_block_roots in pages_and_block_roots {
+    for (page, block_roots) in pages_and_block_roots {
+        let trees = notion.block_roots_to_tree(block_roots).await?;
+
         prompt_info.push(
-            notion
-                .page_and_blocks_to_tree(page_and_block_roots)
-                .await
-                .unwrap(),
-        )
+            format!(
+                "Page Title: {}\n{:?}",
+                page.url,
+                trees
+                    .into_iter()
+                    .map(|tree| tree.debug_pretty_print())
+                    .collect()
+                    .join("\n")
+            )
+            .as_str(),
+        );
     }
+    let prompt_info = prompt_info.join("\n\n");
+    debug!(target: "notion", "prompt info:\n{}", prompt_info);
+
     info!(target: "notion", "notion page ingestion successful");
     return;
 }

@@ -21,15 +21,11 @@ pub struct Block {
     pub creation_date: DateTime<Utc>,
     pub update_date: DateTime<Utc>,
     pub parent_block_id: Option<String>,
-    pub child_block_ids: Vec<String>,
+    pub has_children: bool,
 }
 
 impl Block {
-    pub fn from_notion_block(
-        notion_block: NotionBlock,
-        page_id: String,
-        child_block_ids: Vec<String>,
-    ) -> Self {
+    pub fn from_notion_block(notion_block: NotionBlock, page_id: String) -> Self {
         Block {
             id: notion_block.id.unwrap_or_default(),
             page_id,
@@ -41,30 +37,31 @@ impl Block {
                 Parent::BlockId { block_id } => Some(block_id),
                 _ => None,
             }),
-            child_block_ids,
+            has_children: notion_block.has_children.unwrap_or_default(),
         }
     }
 
     pub fn is_empty(&self) -> bool {
         match &self.block_type {
-            BlockType::Paragraph { paragraph } => self.rich_text_is_empty(&paragraph.rich_text),
-            BlockType::Heading1 { heading_1 } => self.rich_text_is_empty(&heading_1.rich_text),
-            BlockType::Heading2 { heading_2 } => self.rich_text_is_empty(&heading_2.rich_text),
-            BlockType::Heading3 { heading_3 } => self.rich_text_is_empty(&heading_3.rich_text),
+            BlockType::Paragraph { paragraph } => Self::rich_text_is_empty(&paragraph.rich_text),
+            BlockType::Heading1 { heading_1 } => Self::rich_text_is_empty(&heading_1.rich_text),
+            BlockType::Heading2 { heading_2 } => Self::rich_text_is_empty(&heading_2.rich_text),
+            BlockType::Heading3 { heading_3 } => Self::rich_text_is_empty(&heading_3.rich_text),
             BlockType::BulletedListItem { bulleted_list_item } => {
-                self.rich_text_is_empty(&bulleted_list_item.rich_text)
+                Self::rich_text_is_empty(&bulleted_list_item.rich_text)
             }
             BlockType::NumberedListItem { numbered_list_item } => {
-                self.rich_text_is_empty(&numbered_list_item.rich_text)
+                Self::rich_text_is_empty(&numbered_list_item.rich_text)
             }
-            BlockType::Toggle { toggle } => self.rich_text_is_empty(&toggle.rich_text),
-            // there might be some actually-empty blocks that we miss here by always
-            // returning false, but it's better to err on the safe side for now
-            _ => false,
+            BlockType::Toggle { toggle } => Self::rich_text_is_empty(&toggle.rich_text),
+            // there will be some non-empty Blocks (for instance, blocks with images)that we miss
+            // here by always using "true" as a catchall, but we're fine for now
+            // TODO: have this handle all BlockTypes
+            _ => true,
         }
     }
 
-    fn rich_text_is_empty(&self, rich_text: &[RichText]) -> bool {
+    fn rich_text_is_empty(rich_text: &[RichText]) -> bool {
         rich_text.iter().all(|rt| match rt {
             RichText::Text { text, .. } => text.content.is_empty(),
             _ => true,
@@ -130,6 +127,7 @@ impl Block {
 
 pub struct Page {
     pub id: String,
+    pub title: String,
     pub url: String,
     pub creation_date: DateTime<Utc>,
     pub update_date: DateTime<Utc>,
