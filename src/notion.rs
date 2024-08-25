@@ -1,4 +1,4 @@
-use crate::core::datatypes::Block;
+use crate::core::datatypes::{Block, Page};
 use chrono::{Duration, Utc};
 use log::debug;
 use notion_client::{
@@ -10,13 +10,16 @@ use notion_client::{
         Client,
     },
     objects::{
-        block::Block as NotionBlock,
-        page::Page,
+        block::{Block as NotionBlock, BlockType, ParagraphValue},
+        page::{Page as NotionPage},
+        rich_text::{RichText, Text, Annotations, TextColor},
     },
     NotionClientError,
 };
 use reqwest::ClientBuilder;
 use std::collections::VecDeque;
+use dendron::{Tree, Node};
+use futures::future::{self, try_join_all};
 
 pub struct Notion {
     client: Client,
@@ -36,7 +39,7 @@ impl Notion {
         dur: Duration,
     ) -> Result<Vec<Page>, NotionClientError> {
 
-        let mut pages = Vec::new();
+        let mut pages: Vec<Page> = Vec::new();
         let cutoff = Utc::now() - dur;
         let mut current_cursor: Option<String> = None;
 
@@ -68,34 +71,33 @@ impl Notion {
 
             current_cursor = res.next_cursor;
             let res_len = res.results.len();
-            let mut current_pages = res
+            let mut current_notion_pages = res
                 .results
                 .into_iter()
                 .filter_map(|page_or_db| match page_or_db {
                     PageOrDatabase::Page(page) => Some(page),
                     PageOrDatabase::Database(_) => None,
                 })
-                .collect::<Vec<Page>>();
-            if current_pages.len() != res_len {
+                .collect::<Vec<NotionPage>>();
+            if current_notion_pages.len() != res_len {
                 // TODO improve error handling
-                panic!("something other than a page was found in returned info. res_len: {res_len} currentpages.len(): {}", current_pages.len());
+                panic!("something other than a page was found in returned info. res_len: {res_len} currentpages.len(): {}", current_notion_pages.len());
             }
 
-            // handle the case where a paginated response contains Pages older than `dur`
-            let cutoff_index = current_pages
+            // we only care about pages edited within `dur`, so we need to
+            // cut out the Pages that were edited after `dur`
+            let cutoff_index = current_notion_pages
                 .iter()
                 .position(|page| page.last_edited_time < cutoff);
             if let Some(index) = cutoff_index {
-                current_pages = current_pages.split_at(index).0.to_vec();
-                pages.append(&mut current_pages);
-                break;
+                current_notion_pages = current_notion_pages.split_at(index).0.to_vec();
             }
 
-            pages.append(&mut current_pages);
+            pages.append(&mut try_join_all(current_notion_pages.into_iter().map(|notion_page| {
+                self.from_notion_page(notion_page)
+            })).await.unwrap());
 
-            // there's no more pages, time to break
-            // note: this should extremely rarely, only for Notion integrations less than `dur` old
-            if !res.has_more {
+            if !res.has_more || cutoff_index.is_some() {
                 break;
             }
         }
@@ -103,33 +105,27 @@ impl Notion {
         Ok(pages)
     }
 
-    pub async fn pages_to_blocks(
+    pub async fn get_page_root_blocks   (
         &self,
-        pages: Vec<Page>,
+        page: &Page,
         dur: Duration,
-    ) -> Result<Vec<String>, NotionClientError> {
-        let mut prompt_notes: Vec<String> = Vec::new();
+    ) -> Option<Result<Vec<Block>, NotionClientError>> {
 
-        for page in pages {
-            debug!(target: "notion", "Page URL: {}", page.url);
-            // TODO: figure out how to handle these with error handling rather than silently ignoring
-            // these are special pages I use to hold hundreds of other child pages, and so it
-            // takes forever to load. It doesn't contain any useful info, so skip it.
-            if page.url.contains("Place-To-Store-Pages")
-                || page.url.contains("Daily-Journal")
-                || page.url.contains("Personal-")
-                || page.url.contains("Roam-Import")
-            {
-                continue;
-            }
-            let root_blocks = self.page_blocks(&page, dur).await?;
-            let page_markdown = self.blocks_to_markdown(&page, root_blocks).await?;
-            prompt_notes.push(page_markdown);
+        debug!(target: "notion", "Page URL: {}", page.url);
+        // TODO: figure out how to handle these with error handling rather than silently ignoring
+        // these are special pages I use to hold hundreds of other child pages, and so it
+        // takes forever to load. It doesn't contain any useful info, so skip it.
+        if page.url.contains("Place-To-Store-Pages")
+            || page.url.contains("Daily-Journal")
+            || page.url.contains("Personal-")
+            || page.url.contains("Roam-Import")
+        {
+            return  None;
         }
-        Ok(prompt_notes)
+        Some(self.get_page_root_blocks_inner(page, dur).await)
     }
 
-    pub async fn page_blocks(
+    async fn get_page_root_blocks_inner(
         &self,
         page: &Page,
         dur: Duration,
@@ -139,8 +135,7 @@ impl Notion {
         let mut root_blocks: Vec<Block> = Vec::new();
 
         // simple inefficient solution right now: go through fetching all the
-        // blocks that were edited with `dur`, and then from their build up the Vec<Block> using
-        // the contents of those NotionBlocks
+        // blocks that were edited with `dur`
         block_ids_to_process.push_back(page.id.clone());
 
         while let Some(block_id) = block_ids_to_process.pop_front() {
@@ -186,29 +181,6 @@ impl Notion {
 
     }
 
-    pub async fn blocks_to_markdown(
-        &self,
-        page: &Page,
-        root_blocks: Vec<Block>,
-    ) -> Result<String, NotionClientError> {
-        
-        // At last we have all of the page's children Blocks that were updated in the last `dur`
-        // period of time and are non-empty. Now we will expand out these Blocks' children
-        // recursively, and use that to write a markdown String that represents all of the
-        // relevant Block content for this Page
-
-        let page_name = Notion::get_title_of_page(page);
-        let mut page_name_line = "Page Name: ".to_string() + &page_name;
-        page_name_line.push('\n');
-        let mut page_markdown = page_name_line;
-
-        self.build_page_markdown(root_blocks, &mut page_markdown, 1).await?;
-
-        debug!("page_markdown:\n{}", page_markdown);
-
-        Ok(page_markdown)
-    }
-
     async fn retrieve_all_notion_block_children(
         &self,
         block_id: &str,
@@ -241,7 +213,7 @@ impl Notion {
     ) -> Result<Vec<Block>, NotionClientError> {
         let mut blocks: Vec<Block> = Vec::new();
 
-        let notion_blocks: Vec<NotionBlock> = self.retrieve_all_notion_block_children(block_id).await?;
+        let notion_blocks: Vec<NotionBlock> = self.retrieve_all_notion_block_children(block_id).await?.into_iter();
         for block in notion_blocks {
             let block_children_ids = if block.has_children.is_some_and(|b| b) {
                 self.retrieve_all_notion_block_children(&block.id.clone().unwrap())
@@ -256,6 +228,28 @@ impl Notion {
         }
         
         Ok(blocks)
+    }
+
+    pub async fn page_and_blocks_to_tree(
+        &self,
+        (page, root_blocks): (Page, Vec<Block>)
+    ) -> Result<Tree<Block>, NotionClientError> {
+        
+        // At last we have all of the page's children Blocks that were updated in the last `dur`
+        // period of time and are non-empty. Now we will expand out these Blocks' children
+        // recursively, and use that to write a markdown String that represents all of the
+        // relevant Block content for this Page
+
+        // let page_name = Notion::get_title_of_page(&page);
+        // let mut page_name_line = "Page Name: ".to_string() + &page_name;
+        // page_name_line.push('\n');
+        // let mut page_markdown = page_name_line;
+
+        // self.build_page_markdown(root_blocks, &mut page_markdown, 1).await?;
+
+        // debug!("page_markdown:\n{}", page_markdown);
+
+        // Ok(page_markdown)
     }
 
     async fn build_page_markdown(&self, blocks: Vec<Block>, page_markdown: &mut String, num_tabs: usize) -> Result<(), NotionClientError> {
@@ -288,5 +282,15 @@ impl Notion {
             },
             None => "Unknown Page Title".to_string()
         }
+    }
+
+    async fn from_notion_page(&self, notion_page: NotionPage) -> Result<Page, NotionClientError> {
+        Ok(Page {
+            id: notion_page.id.clone(),
+        url: notion_page.url.clone(),
+        creation_date: notion_page.created_time,
+        update_date: notion_page.last_edited_time,
+        child_blocks: self.retrieve_all_block_children(notion_page.id.clone(), &notion_page.id).await?,
+        })
     }
 }

@@ -1,6 +1,7 @@
 
 use chrono::{DateTime, Utc};
 use notion_client::objects::block::{Block as NotionBlock, BlockType};
+use notion_client::objects::page::Page as NotionPage;
 use notion_client::objects::parent::Parent;
 use notion_client::objects::rich_text::RichText;
 use serde::{Deserialize, Serialize};
@@ -98,4 +99,12 @@ impl Block {
 
         rich_texts.into_iter().map(Option::unwrap_or_default).collect::<Vec<String>>().join(" ")
     }
+}
+
+pub struct Page {
+    pub id: String,
+    pub url: String,
+    pub creation_date: DateTime<Utc>,
+    pub update_date: DateTime<Utc>,
+    pub child_blocks: Vec<Block>
 }
