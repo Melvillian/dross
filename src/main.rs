@@ -36,13 +36,7 @@ async fn main() {
         debug!(target: "notion", "grown {} trees, and they look like:", trees.len());
         debug!(target: "notion", "{:?}", trees);
 
-        prompt_info.push(
-            format!(
-                "Page Title: {}\n{:?}",
-                page.url,
-                trees
-            ),
-        );
+        prompt_info.push(format!("Page Title: {}\n{:?}", page.url, trees));
     }
     let prompt_info = prompt_info.join("\n\n");
     debug!(target: "notion", "prompt info:\n{}", prompt_info);

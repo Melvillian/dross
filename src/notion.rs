@@ -225,7 +225,9 @@ impl Notion {
                 let has_children = node.borrow_data().has_children;
 
                 if has_children {
-                    let children = self.retrieve_all_block_children(&page_id, &block_id).await?;
+                    let children = self
+                        .retrieve_all_block_children(&page_id, &block_id)
+                        .await?;
                     for child in children {
                         node.create_as_last_child(&grant, child);
                         queue.push_back(node.last_child().unwrap());
