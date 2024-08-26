@@ -237,32 +237,32 @@ impl Notion {
         Ok(blossomed_roots)
     }
 
-    async fn build_page_markdown(
-        &self,
-        blocks: Vec<Block>,
-        page_markdown: &mut String,
-        num_tabs: usize,
-    ) -> Result<(), NotionClientError> {
-        // TODO, figure out how to handle images
-        if blocks.is_empty() {
-            return Ok(());
-        }
-        for block in blocks {
-            // add this Block's contribution to the Page's markdown string
-            let mut line = "\t".repeat(num_tabs);
-            line.push_str(&block.get_text());
-            page_markdown.push_str(&line);
-            page_markdown.push('\n');
+    // async fn build_page_markdown(
+    //     &self,
+    //     blocks: Vec<Block>,
+    //     page_markdown: &mut String,
+    //     num_tabs: usize,
+    // ) -> Result<(), NotionClientError> {
+    //     // TODO, figure out how to handle images
+    //     if blocks.is_empty() {
+    //         return Ok(());
+    //     }
+    //     for block in blocks {
+    //         // add this Block's contribution to the Page's markdown string
+    //         let mut line = "\t".repeat(num_tabs);
+    //         line.push_str(&block.get_text());
+    //         page_markdown.push_str(&line);
+    //         page_markdown.push('\n');
 
-            let block_children = self
-                .retrieve_all_block_children(&block.page_id, &block.id)
-                .await?;
-            // note, we have the Box::pin so that we can call .await in a recursive function
-            Box::pin(self.build_page_markdown(block_children, page_markdown, num_tabs + 1)).await?;
-        }
+    //         let block_children = self
+    //             .retrieve_all_block_children(&block.page_id, &block.id)
+    //             .await?;
+    //         // note, we have the Box::pin so that we can call .await in a recursive function
+    //         Box::pin(self.build_page_markdown(block_children, page_markdown, num_tabs + 1)).await?;
+    //     }
 
-        Ok(())
-    }
+    //     Ok(())
+    // }
 
     async fn from_notion_page(&self, notion_page: NotionPage) -> Result<Page, NotionClientError> {
         Ok(Page {

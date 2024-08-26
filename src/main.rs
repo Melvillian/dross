@@ -33,6 +33,8 @@ async fn main() {
     let mut prompt_info = Vec::new();
     for (page, block_roots) in pages_and_block_roots {
         let trees = notion.grow_the_roots(block_roots).await.unwrap();
+        debug!(target: "notion", "grown {} trees, and they look like:", trees.len());
+        debug!(target: "notion", "{:?}", trees);
 
         prompt_info.push(
             format!(
