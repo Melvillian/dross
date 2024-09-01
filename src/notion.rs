@@ -2,20 +2,17 @@ use crate::core::datatypes::{Block, Page};
 use chrono::{Duration, Utc};
 use dendron::{Node, Tree};
 use futures::future::{self, try_join_all};
-use log::debug;
+use log::{debug, error};
 use notion_client::{
     endpoints::{
+        blocks::retrieve::response::RetrieveBlockChilerenResponse,
         search::title::{
             request::{Filter, SearchByTitleRequestBuilder, Sort, SortDirection, Timestamp},
             response::PageOrDatabase,
         },
         Client,
     },
-    objects::{
-        block::{Block as NotionBlock, BlockType, ParagraphValue},
-        page::{self, Page as NotionPage},
-        rich_text::{Annotations, RichText, Text, TextColor},
-    },
+    objects::page::Page as NotionPage,
     NotionClientError,
 };
 use reqwest::ClientBuilder;
@@ -92,15 +89,21 @@ impl Notion {
                 current_notion_pages = current_notion_pages.split_at(index).0.to_vec();
             }
 
-            pages.append(
-                &mut try_join_all(
-                    current_notion_pages
-                        .into_iter()
-                        .map(|notion_page| self.from_notion_page(notion_page)),
-                )
-                .await
-                .unwrap(),
-            );
+            for notion_page in current_notion_pages {
+                debug!("made it!");
+                let page = self.from_notion_page(notion_page).await?;
+                pages.push(page);
+            }
+
+            // pages.append(
+            //     &mut try_join_all(
+            //         current_notion_pages
+            //             .into_iter()
+            //             .map(|notion_page| self.from_notion_page(notion_page)),
+            //     )
+            //     .await
+            //     .unwrap(),
+            // );
 
             if !res.has_more || cutoff_index.is_some() {
                 break;
@@ -183,7 +186,24 @@ impl Notion {
                 .client
                 .blocks
                 .retrieve_block_children(block_id, current_cursor.as_deref(), Some(100))
-                .await?;
+                .await;
+
+            let res: RetrieveBlockChilerenResponse = match res {
+                Ok(res) => res,
+                Err(e) => match e {
+                    NotionClientError::FailedToDeserialize { source: _, body } => {
+                        debug!(target: "notion", "Custom Failed to deserialize response body: {body}");
+                        // there seems to be some bug in notion-client where it's unable to handle these
+                        // Response bodies, so I need to manually deserialize them here
+                        // TODO research further what's going on here
+                        serde_json::from_str(&body).unwrap()
+                    }
+                    _ => {
+                        error!(target: "notion", "Custom error in retrieve_block_children {}", e);
+                        panic!("{}", e)
+                    }
+                },
+            };
 
             children_blocks.append(
                 &mut res

@@ -888,8 +888,7 @@ dependencies = [
 [[package]]
 name = "notion-client"
 version = "1.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e53fd1a6da92845759dd84d873ebf130826af4d4aad0e44bd1be80d5ea7b6f8e"
+source = "git+https://github.com/Melvillian/notion-client.git?branch=main#f36a6d202bfa652c41b43db09ad8e639c22f3fec"
 dependencies = [
  "chrono",
  "derive_builder 0.20.0",
