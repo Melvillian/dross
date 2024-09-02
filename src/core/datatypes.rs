@@ -1,8 +1,6 @@
 use chrono::{DateTime, Utc};
-use log::debug;
-use notion_client::objects::block::{Block as NotionBlock, BlockType};
+use notion_client::objects::block::Block as NotionBlock;
 use notion_client::objects::parent::Parent;
-use notion_client::objects::rich_text::RichText;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,7 +23,9 @@ impl Block {
             // it's a nice-to-have right now
             page_id,
             // this is where the actual Block data is
-            text: notion_block.block_type.plain_text()
+            text: notion_block
+                .block_type
+                .plain_text()
                 .into_iter()
                 .map(Option::unwrap_or_default)
                 .collect::<Vec<String>>()
@@ -43,7 +43,6 @@ impl Block {
     pub fn is_empty(&self) -> bool {
         self.text.is_empty()
     }
-
 }
 
 pub struct Page {

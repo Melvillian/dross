@@ -1,7 +1,6 @@
 use crate::core::datatypes::{Block, Page};
 use chrono::{Duration, Utc};
 use dendron::{Node, Tree};
-use futures::future::{self, try_join_all};
 use log::{debug, error};
 use notion_client::{
     endpoints::{
@@ -91,7 +90,7 @@ impl Notion {
 
             for notion_page in current_notion_pages {
                 debug!("made it!");
-                let page = self.from_notion_page(notion_page).await?;
+                let page = self.notion_page_to_dross_page(notion_page).await?;
                 pages.push(page);
             }
 
@@ -286,7 +285,10 @@ impl Notion {
     //     Ok(())
     // }
 
-    async fn from_notion_page(&self, notion_page: NotionPage) -> Result<Page, NotionClientError> {
+    async fn notion_page_to_dross_page(
+        &self,
+        notion_page: NotionPage,
+    ) -> Result<Page, NotionClientError> {
         Ok(Page {
             id: notion_page.id.clone(),
             // convert https://www.notion.so/August-19-2024-651d530e07a14f9c97b4084614c5049b -> August 19 2024

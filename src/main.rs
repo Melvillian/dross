@@ -1,7 +1,5 @@
 use chrono::Duration;
 use dotenv::dotenv;
-use dross::core::*;
-use dross::intelligence::*;
 use dross::notion::Notion;
 use log::{debug, info};
 use std::env;
