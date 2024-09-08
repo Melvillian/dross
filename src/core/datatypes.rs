@@ -15,6 +15,7 @@ pub struct Block {
 }
 
 impl Block {
+    #[must_use]
     pub fn from_notion_block(notion_block: NotionBlock, page_id: String) -> Self {
         Block {
             id: notion_block.id.unwrap_or_default(),
@@ -40,6 +41,8 @@ impl Block {
         }
     }
 
+    #[inline]
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.text.is_empty()
     }

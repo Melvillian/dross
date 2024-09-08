@@ -1,8 +1,12 @@
 use chrono::Duration;
+use dendron::tree::{DebugPrettyPrint, DebugPrintTree};
 use dotenv::dotenv;
-use dross::notion::Notion;
+use dross::{
+    core::{datatypes::Block, helpers::build_markdown_from_trees},
+    notion::Notion,
+};
 use log::{debug, info};
-use std::env;
+use std::{env, fmt::Debug};
 
 #[tokio::main]
 async fn main() {
@@ -10,7 +14,14 @@ async fn main() {
     env_logger::init();
 
     let notion_token: String = env::var("NOTION_TOKEN").expect("NOTION_TOKEN must be set");
-    let dur: Duration = Duration::days(7); // TODO, make this a CLI arg
+    let dur: Duration = Duration::days(match env::var("RUST_LOG") {
+        Ok(log_level) => match log_level.to_lowercase().as_str() {
+            "debug" => 1,
+            _ => 7,
+        },
+        Err(_) => 7,
+    }); // TODO, make this a CLI arg, for now we're just differentiating
+        // between DEBUG and non-debug to speed iterating on debugging
 
     // ingest notes data from Notion
     let notion = Notion::new(notion_token).unwrap();
@@ -28,17 +39,20 @@ async fn main() {
         }
     }
 
-    let mut prompt_info = Vec::new();
+    let mut every_prompt_markdown = Vec::new();
     for (page, block_roots) in pages_and_block_roots {
         let trees = notion.grow_the_roots(block_roots).await.unwrap();
         debug!(target: "notion", "grown {} trees, and they look like:", trees.len());
         debug!(target: "notion", "{:?}", trees);
 
-        prompt_info.push(format!("Page Title: {}\n{:?}", page.url, trees));
+        let single_page_prompt_markdown = build_markdown_from_trees(trees);
+        every_prompt_markdown.push(format!(
+            "Page Title: {}\n{:?}",
+            page.url, single_page_prompt_markdown
+        ));
     }
-    let prompt_info = prompt_info.join("\n\n");
+    let prompt_info = every_prompt_markdown.join("\n\n");
     debug!(target: "notion", "prompt info:\n{}", prompt_info);
 
     info!(target: "notion", "notion page ingestion successful");
-    return;
 }

@@ -39,15 +39,16 @@ impl Notion {
         let mut current_cursor: Option<String> = None;
 
         let mut req_builder = SearchByTitleRequestBuilder::default();
-        req_builder.filter(Filter {
-            value: notion_client::endpoints::search::title::request::FilterValue::Page,
-            property: notion_client::endpoints::search::title::request::FilterProperty::Object,
-        });
-        req_builder.sort(Sort {
-            timestamp: Timestamp::LastEditedTime,
-            direction: SortDirection::Descending,
-        });
-        req_builder.page_size(100);
+        req_builder
+            .filter(Filter {
+                value: notion_client::endpoints::search::title::request::FilterValue::Page,
+                property: notion_client::endpoints::search::title::request::FilterProperty::Object,
+            })
+            .sort(Sort {
+                timestamp: Timestamp::LastEditedTime,
+                direction: SortDirection::Descending,
+            })
+            .page_size(100);
 
         loop {
             // paging
@@ -89,20 +90,9 @@ impl Notion {
             }
 
             for notion_page in current_notion_pages {
-                debug!("made it!");
                 let page = self.notion_page_to_dross_page(notion_page).await?;
                 pages.push(page);
             }
-
-            // pages.append(
-            //     &mut try_join_all(
-            //         current_notion_pages
-            //             .into_iter()
-            //             .map(|notion_page| self.from_notion_page(notion_page)),
-            //     )
-            //     .await
-            //     .unwrap(),
-            // );
 
             if !res.has_more || cutoff_index.is_some() {
                 break;
