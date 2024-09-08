@@ -1,12 +1,11 @@
 use chrono::Duration;
-use dendron::tree::{DebugPrettyPrint, DebugPrintTree};
 use dotenv::dotenv;
 use dross::{
-    core::{datatypes::Block, helpers::build_markdown_from_trees},
+    core::helpers::build_markdown_from_trees,
     notion::Notion,
 };
 use log::{debug, info};
-use std::{env, fmt::Debug};
+use std::env;
 
 #[tokio::main]
 async fn main() {
@@ -48,7 +47,7 @@ async fn main() {
         let single_page_prompt_markdown = build_markdown_from_trees(trees);
         every_prompt_markdown.push(format!(
             "Page Title: {}\n{:?}",
-            page.url, single_page_prompt_markdown
+            page.title, single_page_prompt_markdown
         ));
     }
     let prompt_info = every_prompt_markdown.join("\n\n");

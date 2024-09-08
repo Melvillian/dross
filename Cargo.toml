@@ -9,11 +9,9 @@ chrono = "0.4.38"
 dotenv = "0.15.0"
 reqwest = "0.11.7"
 notion-client = { git = "https://github.com/Melvillian/notion-client.git", branch = "main" }
-openai = "1.0.0-alpha.15"
 serde = "1.0.204"
 serde_json = "1.0.120"
 tokio = { version = "1", features = ["full"] }
 log = { version = "0.4.22", features = ["kv"] }
 env_logger = "0.11.5"
 dendron = "0.1.5"
-futures = "0.3.30"
