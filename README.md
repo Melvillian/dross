@@ -1,6 +1,24 @@
+
+<div align="center">
+  <img src="img/dross.webp">
+</div>
+
 # Dross (In Rust 🦀)
 
 A tool for expanding the power of your [exobrain](https://beepb00p.xyz/exobrain/) ⚡🧠
+
+## Getting Started
+
+1. Follow the instructions for creating an [internal Notion integration here](https://www.notion.so/help/create-integrations-with-the-notion-api#create-an-internal-integration)
+2. Connect the integration to the Notion Pages you want this CLI to have access to by following [this Notion guide](https://www.notion.so/help/add-and-manage-connections-with-the-api#add-connections-to-pages)
+3. Run `cp .env.example .env` and fill in the env var values.
+4. `cargo build`
+5. `RUST_LOG=debug cargo run`
+6. Profit!
+
+### Helpful Tools
+
+1. [notion-cli-rs](https://github.com/Melvillian/notion-cli-rs): useful for quickly fetching Notion data when you need to debug your exobrain.
 
 ## TODO
 

@@ -1,9 +1,6 @@
 use chrono::Duration;
 use dotenv::dotenv;
-use dross::{
-    core::helpers::build_markdown_from_trees,
-    notion::Notion,
-};
+use dross::{core::helpers::build_markdown_from_trees, notion::Notion};
 use log::{debug, info};
 use std::env;
 
@@ -12,7 +9,6 @@ async fn main() {
     dotenv().ok();
     env_logger::init();
 
-    let notion_token: String = env::var("NOTION_TOKEN").expect("NOTION_TOKEN must be set");
     let dur: Duration = Duration::days(match env::var("RUST_LOG") {
         Ok(log_level) => match log_level.to_lowercase().as_str() {
             "debug" => 1,
@@ -23,7 +19,9 @@ async fn main() {
         // between DEBUG and non-debug to speed iterating on debugging
 
     // ingest notes data from Notion
+    let notion_token: String = env::var("NOTION_TOKEN").expect("NOTION_TOKEN must be set");
     let notion = Notion::new(notion_token).unwrap();
+
     let pages_edited_within_dur = notion.get_last_edited_pages(dur).await.unwrap();
     info!(target: "notion", "retrieved {} Pages edited in the last {} days", pages_edited_within_dur.len(), dur.num_days());
     let mut pages_and_block_roots = Vec::new();
