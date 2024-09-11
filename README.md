@@ -2,6 +2,14 @@
 
 A tool for expanding the power of your [exobrain](https://beepb00p.xyz/exobrain/) ⚡🧠
 
+# Roadmap
+
+- [ ] Build a service for ingesting exobrain text (Notion, Obsidian, Apple Notes, etc.)
+- [ ] Use RAG and LLM Prompting to periodically run a personalized retro for your life
+- [ ] Expand memory powers using SRS on exobrain
+- [ ] Use Dross to identify [The One Thing](https://en.wikipedia.org/wiki/The_One_Thing_(book)) to iterate on
+- [ ] Learn from users what new exobrain powers they would like  
+
 ## TODO
 
 - [ ] Ingest latest 7 days of edited blocks from notion
