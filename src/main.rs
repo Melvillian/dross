@@ -26,15 +26,13 @@ async fn main() {
     info!(target: "notion", "retrieved {} Pages edited in the last {} days", pages_edited_within_dur.len(), dur.num_days());
     let mut pages_and_block_roots = Vec::new();
     for page in pages_edited_within_dur {
-        match notion.get_page_block_roots(&page, dur).await {
-            Some(block_roots) => {
-                pages_and_block_roots.push((page, block_roots.unwrap()));
-            }
-            None => {
-                continue;
-            }
-        }
+        debug!(target: "notion", "Page URL: {}", page.url);
+
+        let new_block_roots = notion.get_page_block_roots(&page, dur).await.unwrap();
+        pages_and_block_roots.push((page, new_block_roots));
     }
+
+    debug!(target: "notion", "retrieved {} pages and their block roots, now we will grow them!", pages_and_block_roots.len());
 
     let mut every_prompt_markdown = Vec::new();
     for (page, block_roots) in pages_and_block_roots {
