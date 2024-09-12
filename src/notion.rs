@@ -1,7 +1,7 @@
 use crate::core::datatypes::{Block, Page};
 use chrono::{Duration, Utc};
 use dendron::{Node, Tree};
-use log::{debug, error};
+use log::{debug, error, trace};
 use notion_client::{
     endpoints::{
         blocks::retrieve::response::RetrieveBlockChilerenResponse,
@@ -14,8 +14,7 @@ use notion_client::{
     objects::page::Page as NotionPage,
     NotionClientError,
 };
-use reqwest::ClientBuilder;
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 
 pub struct Notion {
     client: Client,
@@ -23,7 +22,7 @@ pub struct Notion {
 
 impl Notion {
     pub fn new(token: String) -> Result<Self, NotionClientError> {
-        let client = Client::new(token, Some(ClientBuilder::new()));
+        let client = Client::new(token, None);
         match client {
             Ok(c) => Ok(Notion { client: c }),
             Err(e) => Err(e),
@@ -102,26 +101,15 @@ impl Notion {
         Ok(pages)
     }
 
+    /// For a given Notion `Page`, retrieve all of its non-empty children, grandchildren, etc... `Block`s that were edited within the specified duration.
+    ///
+    /// Uses breadth-first-search to recursively fetch all the block descendants of the page.
+    ///
+    /// # Returns
+    /// A `Result` containing a `Vec` of all the `Page`'s descentant `Block`s that were updated between within `dur`. Note
+    /// that this includes the `Page` `Block` itself. Also note that the order of the `Block`s is not guaranteed and
+    /// cannot be relied upon.
     pub async fn get_page_block_roots(
-        &self,
-        page: &Page,
-        dur: Duration,
-    ) -> Option<Result<Vec<Block>, NotionClientError>> {
-        debug!(target: "notion", "Page URL: {}", page.url);
-        // TODO: figure out how to handle these with error handling rather than silently ignoring
-        // these are special pages I use to hold hundreds of other child pages, and so it
-        // takes forever to load. It doesn't contain any useful info, so skip it.
-        if page.url.contains("Place-To-Store-Pages-")
-            || page.url.contains("Daily-Journal-")
-            || page.url.contains("Personal-")
-            || page.url.contains("Roam-Import-")
-        {
-            return None;
-        }
-        Some(self.get_page_block_roots_inner(page, dur).await)
-    }
-
-    async fn get_page_block_roots_inner(
         &self,
         page: &Page,
         dur: Duration,
@@ -129,40 +117,68 @@ impl Notion {
         let cutoff = Utc::now() - dur;
         let mut block_ids_to_process = VecDeque::new();
         let mut block_roots: Vec<Block> = Vec::new();
+        let mut already_visited: HashSet<String> = HashSet::new();
 
-        // simple inefficient solution right now: go through fetching all the
-        // blocks that were edited with `dur`
+        // some user's Pages are huuuge, so long that we don't know if we'll spend too much time
+        // much time fetching all their children. So, as a heuristic for when to abort we use
+        // a fixed time (time_to_spend_fetching_children) after which we abort and use whichever
+        // block roots (if any) we have
+        let time_to_spend_fetching_children = Duration::seconds(30);
+        let abort_time = Utc::now() + time_to_spend_fetching_children;
+
         block_ids_to_process.push_back(page.id.clone());
 
         while let Some(block_id) = block_ids_to_process.pop_front() {
-            let block_siblings = self
+            if already_visited.contains(&block_id) {
+                trace!(
+                    target: "notion",
+                    "already visited this block {}, skipping it...",
+                    &block_id
+                );
+                // we've already processed this block, so skip it
+                continue;
+            }
+            trace!(
+                target: "notion",
+                "getting block root with id {}",
+                &block_id
+            );
+            let children = self
                 .retrieve_all_block_children(&page.id, &block_id)
                 .await?;
 
-            for block in block_siblings {
-                if block.update_date > cutoff {
-                    // we don't recurse on its children, we'll process
-                    // them later
-                    block_roots.push(block);
+            for block in children {
+                if block.update_date >= cutoff {
+                    // is the Block's edit time within the duration?
+                    if !block.is_empty() {
+                        // note, there may be further descendants of this block that were
+                        // edited within the duration, but we will process those in a later
+                        // function
+                        block_roots.push(block);
+                    }
                 } else {
                     // keep recursing down the tree of children blocks
                     block_ids_to_process.push_back(block.id);
                 }
             }
+
+            already_visited.insert(block_id);
+
+            if Utc::now() > abort_time {
+                // we've spent too much time fetching children, so just return what we have
+                debug!(target: "notion", "aborting block retrieval due to time limit");
+                debug!(target: "notion", "returning {} block roots for page: {}", block_roots.len(), page.title);
+                break;
+            }
         }
-        debug!(target: "notion", "fetched {} relevant but possibly-empty Blocks from Page {}", block_roots.len(), page.url);
+
+        debug!(target: "notion", "fetched {} descendant Blocks from Page {}", block_roots.len(), page.url);
         debug!(target: "notion", "{:#?}", block_roots);
 
-        // filter out empty blocks
-        let relevant_blocks: Vec<Block> =
-            block_roots.into_iter().filter(|b| !b.is_empty()).collect();
-        debug!(target: "notion", "fetched {} relevant Blocks from Page {}", relevant_blocks.len(), page.url);
-        debug!(target: "notion", "{:#?}", relevant_blocks);
-
-        Ok(relevant_blocks)
+        Ok(block_roots)
     }
 
-    async fn retrieve_all_block_children(
+    pub async fn retrieve_all_block_children(
         &self,
         page_id: &str,
         block_id: &str,
@@ -177,11 +193,16 @@ impl Notion {
                 .retrieve_block_children(block_id, current_cursor.as_deref(), Some(100))
                 .await;
 
+            let mut there_was_an_error = false;
             let res: RetrieveBlockChilerenResponse = match res {
                 Ok(res) => res,
                 Err(e) => match e {
                     NotionClientError::FailedToDeserialize { source: _, body } => {
-                        debug!(target: "notion", "Custom Failed to deserialize response body: {body}");
+                        there_was_an_error = true;
+                        let json_value: serde_json::Value = serde_json::from_str(&body).unwrap();
+                        let pretty_json = serde_json::to_string_pretty(&json_value).unwrap();
+                        debug!(target: "notion", "Custom Failed to deserialize response body");
+                        debug!(target: "notion", "{}", pretty_json);
                         // there seems to be some bug in notion-client where it's unable to handle these
                         // Response bodies, so I need to manually deserialize them here
                         // TODO research further what's going on here
@@ -193,6 +214,10 @@ impl Notion {
                     }
                 },
             };
+
+            if there_was_an_error {
+                debug!(target: "notion", "there was an error but we made it past so we must have block children {:?}", res.results);
+            }
 
             children_blocks.append(
                 &mut res
@@ -211,13 +236,33 @@ impl Notion {
         Ok(children_blocks)
     }
 
+    /// Given a `Vec` of `Block`s (call these `Block`s "roots") that have been updated recently,
+    /// return a `Tree`-like representation of each each root and its descendants by recursively
+    /// fetching the children of each root, and the children of those children, etc...
+    ///
+    /// The goal here is to create a tree structure that mimics of nested structure of a page
+    /// notes, where the nesting is achieved by indenting the text of each block under its parent.
+    ///
+    /// So we want to go from a `Vec` of `Block`s like:
+    ///
+    ///      block_root_1         block_root_2     ....    block_root_n
+    ///
+    /// and end with something that, represented in tree-fashion, looks like:
+    ///
+    ///      block_root_1         block_root_2     ....    block_root_n
+    ///          |                     |                       |
+    ///    +-----+-----+         +-----+-----+       .        ZZZ
+    ///    |     |     |         |           |       .
+    ///   A      B     C         J           K       .
+    ///   |      |     |         |           |       .
+    ///  +-+    +-+   +-+       +---+       +-+      .
+    ///  | |    | |   | |       | | |       | |      .
+    ///  D E    F G   H I       L M N       O P      .
+    ///
     pub async fn grow_the_roots(
         &self,
         block_roots: Vec<Block>,
     ) -> Result<Vec<Tree<Block>>, NotionClientError> {
-        // At last we have all of the page's children Blocks that were updated in the last `dur`
-        // period of time and are non-empty. Now we will expand out these Blocks' children
-        // recursively, and use that to create a tree of each Page's structure
         let mut blossomed_roots = Vec::new();
         for block in block_roots {
             let root = Node::new_tree(block);
@@ -247,33 +292,6 @@ impl Notion {
 
         Ok(blossomed_roots)
     }
-
-    // async fn build_page_markdown(
-    //     &self,
-    //     blocks: Vec<Block>,
-    //     page_markdown: &mut String,
-    //     num_tabs: usize,
-    // ) -> Result<(), NotionClientError> {
-    //     // TODO, figure out how to handle images
-    //     if blocks.is_empty() {
-    //         return Ok(());
-    //     }
-    //     for block in blocks {
-    //         // add this Block's contribution to the Page's markdown string
-    //         let mut line = "\t".repeat(num_tabs);
-    //         line.push_str(&block.get_text());
-    //         page_markdown.push_str(&line);
-    //         page_markdown.push('\n');
-
-    //         let block_children = self
-    //             .retrieve_all_block_children(&block.page_id, &block.id)
-    //             .await?;
-    //         // note, we have the Box::pin so that we can call .await in a recursive function
-    //         Box::pin(self.build_page_markdown(block_children, page_markdown, num_tabs + 1)).await?;
-    //     }
-
-    //     Ok(())
-    // }
 
     async fn notion_page_to_dross_page(
         &self,

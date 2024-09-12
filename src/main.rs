@@ -1,9 +1,6 @@
 use chrono::Duration;
 use dotenv::dotenv;
-use dross::{
-    core::helpers::build_markdown_from_trees,
-    notion::Notion,
-};
+use dross::{core::helpers::build_markdown_from_trees, notion::Notion};
 use log::{debug, info};
 use std::env;
 
@@ -12,7 +9,6 @@ async fn main() {
     dotenv().ok();
     env_logger::init();
 
-    let notion_token: String = env::var("NOTION_TOKEN").expect("NOTION_TOKEN must be set");
     let dur: Duration = Duration::days(match env::var("RUST_LOG") {
         Ok(log_level) => match log_level.to_lowercase().as_str() {
             "debug" => 1,
@@ -23,20 +19,20 @@ async fn main() {
         // between DEBUG and non-debug to speed iterating on debugging
 
     // ingest notes data from Notion
+    let notion_token: String = env::var("NOTION_TOKEN").expect("NOTION_TOKEN must be set");
     let notion = Notion::new(notion_token).unwrap();
+
     let pages_edited_within_dur = notion.get_last_edited_pages(dur).await.unwrap();
     info!(target: "notion", "retrieved {} Pages edited in the last {} days", pages_edited_within_dur.len(), dur.num_days());
     let mut pages_and_block_roots = Vec::new();
     for page in pages_edited_within_dur {
-        match notion.get_page_block_roots(&page, dur).await {
-            Some(block_roots) => {
-                pages_and_block_roots.push((page, block_roots.unwrap()));
-            }
-            None => {
-                continue;
-            }
-        }
+        debug!(target: "notion", "Page URL: {}", page.url);
+
+        let new_block_roots = notion.get_page_block_roots(&page, dur).await.unwrap();
+        pages_and_block_roots.push((page, new_block_roots));
     }
+
+    debug!(target: "notion", "retrieved {} pages and their block roots, now we will grow them!", pages_and_block_roots.len());
 
     let mut every_prompt_markdown = Vec::new();
     for (page, block_roots) in pages_and_block_roots {

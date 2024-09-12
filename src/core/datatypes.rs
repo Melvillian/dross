@@ -30,7 +30,7 @@ impl Block {
                 .into_iter()
                 .map(Option::unwrap_or_default)
                 .collect::<Vec<String>>()
-                .join(" "), // TODO: a space " " separator is not alwasy appropriate, but works for now. Find a better way to join the text
+                .join(" "), // TODO: a space " " separator is not always appropriate, but works for now. Find a better way to join the text
             creation_date: notion_block.created_time.unwrap_or_default(),
             update_date: notion_block.last_edited_time.unwrap_or_default(),
             parent_block_id: notion_block.parent.and_then(|parent| match parent {
