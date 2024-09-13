@@ -9,8 +9,21 @@ A tool for expanding the power of your [exobrain](https://beepb00p.xyz/exobrain/
 
 ## Getting Started
 
-1. Follow the instructions for creating an [internal Notion integration here](https://www.notion.so/help/create-integrations-with-the-notion-api#create-an-internal-integration)
+1. Follow the instructions for creating an [internal Notion integration here](https://www.notion.so/help/create-integrations-with-the-notion-api#create-an-internal-integration) 
+   - You will need to create an integration [here](https://www.notion.so/profile/integrations)
+   - And copy the token into your `.env` file
+   - Provide the integration with the following capabilities: 
+
+<div align="center">
+  <img src="img/notion-integration.png" alt="Notion Connection Instructions">
+</div>
+
 2. Connect the integration to the Notion Pages you want this CLI to have access to by following [this Notion guide](https://www.notion.so/help/add-and-manage-connections-with-the-api#add-connections-to-pages)
+
+<div align="center">
+  <img src="img/notion-connection.png" alt="Notion Connection Instructions">
+</div>
+
 3. Run `cp .env.example .env` and fill in the env var values.
 4. `cargo build`
 5. `RUST_LOG=debug cargo run`
