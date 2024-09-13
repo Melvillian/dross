@@ -14,7 +14,7 @@ pub fn build_markdown_from_trees(trees: Vec<Tree<Block>>) -> String {
 
 fn build_markdown_recursive(node: Node<Block>, depth: usize, markdown: &mut String) {
     let tabs = "\t".repeat(depth);
-    markdown.push_str(&format!("{}{}\n", tabs, node.borrow_data().text));
+    markdown.push_str(&format!("{}{}\n", tabs, node.borrow_data().to_markdown()));
 
     // println!("{}", &format!("{}{}\n", tabs, node.borrow_data().text));
     // println!("{}", node.)
