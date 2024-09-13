@@ -178,64 +178,6 @@ impl Notion {
         Ok(block_roots)
     }
 
-    pub async fn retrieve_all_block_children(
-        &self,
-        page_id: &str,
-        block_id: &str,
-    ) -> Result<Vec<Block>, NotionClientError> {
-        let mut children_blocks: Vec<Block> = Vec::new();
-        let mut current_cursor: Option<String> = None;
-
-        loop {
-            let res = self
-                .client
-                .blocks
-                .retrieve_block_children(block_id, current_cursor.as_deref(), Some(100))
-                .await;
-
-            let mut there_was_an_error = false;
-            let res: RetrieveBlockChilerenResponse = match res {
-                Ok(res) => res,
-                Err(e) => match e {
-                    NotionClientError::FailedToDeserialize { source: _, body } => {
-                        there_was_an_error = true;
-                        let json_value: serde_json::Value = serde_json::from_str(&body).unwrap();
-                        let pretty_json = serde_json::to_string_pretty(&json_value).unwrap();
-                        debug!(target: "notion", "Custom Failed to deserialize response body");
-                        debug!(target: "notion", "{}", pretty_json);
-                        // there seems to be some bug in notion-client where it's unable to handle these
-                        // Response bodies, so I need to manually deserialize them here
-                        // TODO research further what's going on here
-                        serde_json::from_str(&body).unwrap()
-                    }
-                    _ => {
-                        error!(target: "notion", "Custom error in retrieve_block_children {}", e);
-                        panic!("{}", e)
-                    }
-                },
-            };
-
-            if there_was_an_error {
-                debug!(target: "notion", "there was an error but we made it past so we must have block children {:?}", res.results);
-            }
-
-            children_blocks.append(
-                &mut res
-                    .results
-                    .into_iter()
-                    .map(|block| Block::from_notion_block(block, page_id.to_string()))
-                    .collect(),
-            );
-
-            if !res.has_more {
-                break;
-            }
-            current_cursor = res.next_cursor.clone();
-        }
-
-        Ok(children_blocks)
-    }
-
     /// Given a `Vec` of `Block`s (call these `Block`s "roots") that have been updated recently,
     /// return a `Tree`-like representation of each each root and its descendants by recursively
     /// fetching the children of each root, and the children of those children, etc...
@@ -245,20 +187,21 @@ impl Notion {
     ///
     /// So we want to go from a `Vec` of `Block`s like:
     ///
+    /// ```text
     ///      block_root_1         block_root_2     ....    block_root_n
-    ///
+    /// ```
     /// and end with something that, represented in tree-fashion, looks like:
-    ///
-    ///      block_root_1         block_root_2     ....    block_root_n
-    ///          |                     |                       |
-    ///    +-----+-----+         +-----+-----+       .        ZZZ
-    ///    |     |     |         |           |       .
-    ///   A      B     C         J           K       .
-    ///   |      |     |         |           |       .
-    ///  +-+    +-+   +-+       +---+       +-+      .
-    ///  | |    | |   | |       | | |       | |      .
-    ///  D E    F G   H I       L M N       O P      .
-    ///
+    /// ```text
+    ///        block_root_1         block_root_2     ....    block_root_n
+    ///            |                     |                       |
+    ///      +-----+-----+         +-----+-----+       .        ZZZ
+    ///      |     |     |         |           |       .
+    ///     A      B     C         J           K       .
+    ///     |      |     |         |           |       .
+    ///    +-+    +-+   +-+       +---+       +-+      .
+    ///    | |    | |   | |       | | |       | |      .
+    ///    D E    F G   H I       L M N       O P      .
+    /// ```
     pub async fn grow_the_roots(
         &self,
         block_roots: Vec<Block>,
@@ -293,6 +236,65 @@ impl Notion {
         Ok(blossomed_roots)
     }
 
+    /// Retrieves all of the children (potentially multiple pages worth) of a Block with the given ID.
+    ///
+    /// Notion's API only allows for retrieving 100 children at a time, so this
+    /// function exists to paginate through the results and return them all at once.
+    pub async fn retrieve_all_block_children(
+        &self,
+        block_id: &str,
+        page_id: &str,
+    ) -> Result<Vec<Block>, NotionClientError> {
+        let mut children_blocks: Vec<Block> = Vec::new();
+        let mut current_cursor: Option<String> = None;
+
+        loop {
+            let res = self
+                .client
+                .blocks
+                .retrieve_block_children(block_id, current_cursor.as_deref(), Some(100))
+                .await;
+
+            let res: RetrieveBlockChilerenResponse = match res {
+                Ok(res) => res,
+                Err(e) => match e {
+                    NotionClientError::FailedToDeserialize { source: _, body } => {
+                        let json_value: serde_json::Value = serde_json::from_str(&body).unwrap();
+                        let pretty_json = serde_json::to_string_pretty(&json_value).unwrap();
+                        debug!(target: "notion", "Custom Failed to deserialize response body");
+                        debug!(target: "notion", "{}", pretty_json);
+                        // there seems to be some bug in notion-client where it's unable to handle these
+                        // Response bodies, so I need to manually deserialize them here
+                        // TODO research further what's going on here
+                        serde_json::from_str(&body).unwrap()
+                    }
+                    _ => {
+                        error!(target: "notion", "Custom error in retrieve_block_children {}", e);
+                        panic!("{}", e)
+                    }
+                },
+            };
+
+            children_blocks.append(
+                &mut res
+                    .results
+                    .into_iter()
+                    .map(|block| Block::from_notion_block(block, page_id.to_string()))
+                    .collect(),
+            );
+
+            if !res.has_more {
+                break;
+            }
+            current_cursor = res.next_cursor.clone();
+        }
+
+        Ok(children_blocks)
+    }
+
+    /// Converts a Notion page to a Dross page.
+    ///
+    /// Note that the title extraction is a bit hacky and may not work for every page title, but it's good enough for getting the gist of what the page is called.
     async fn notion_page_to_dross_page(
         &self,
         notion_page: NotionPage,
