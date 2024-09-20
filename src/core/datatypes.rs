@@ -3,7 +3,7 @@ use notion_client::objects::block::{Block as NotionBlock, BlockType};
 use notion_client::objects::parent::Parent;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 pub struct Block {
     pub id: String,
     pub page_id: String,
@@ -71,6 +71,7 @@ impl Block {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 pub struct Page {
     pub id: String,
     pub title: String,
@@ -84,7 +85,6 @@ pub struct Page {
 mod tests {
     use notion_client::objects::{
         block::{BulletedListItemValue, TextColor},
-        property::Color,
         rich_text::{RichText, Text},
     };
 

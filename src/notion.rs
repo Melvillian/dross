@@ -1,5 +1,5 @@
 use crate::core::datatypes::{Block, Page};
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use dendron::{Node, Tree};
 use log::{debug, error, trace};
 use notion_client::{
@@ -31,10 +31,9 @@ impl Notion {
 
     pub async fn get_last_edited_pages(
         &self,
-        dur: Duration,
+        cutoff: DateTime<Utc>,
     ) -> Result<Vec<Page>, NotionClientError> {
         let mut pages: Vec<Page> = Vec::new();
-        let cutoff = Utc::now() - dur;
         let mut current_cursor: Option<String> = None;
 
         let mut req_builder = SearchByTitleRequestBuilder::default();
@@ -79,8 +78,8 @@ impl Notion {
                 panic!("something other than a page was found in returned info. res_len: {res_len} currentpages.len(): {}", current_notion_pages.len());
             }
 
-            // we only care about pages edited within `dur`, so we need to
-            // cut out the Pages that were edited after `dur`
+            // we only care about pages edited after the cutoff, so we need to
+            // cut out the Pages that were edited prior to the cutoff
             let cutoff_index = current_notion_pages
                 .iter()
                 .position(|page| page.last_edited_time < cutoff);
@@ -103,18 +102,20 @@ impl Notion {
 
     /// For a given Notion `Page`, retrieve all of its non-empty children, grandchildren, etc... `Block`s that were edited within the specified duration.
     ///
-    /// Uses breadth-first-search to recursively fetch all the block descendants of the page.
+    /// Uses breadth-first-search to recursively fetch all the `Block` descendants of the `Page`.
+    ///
+    /// Note: we do not include the `Page` `Block` as a block root, because then the content of every single `Page` that
+    /// was updated within the duration would be included (that's a ton!), when all we want is the individual
+    /// `Block`s within that `Page` that were updated within the duration.
     ///
     /// # Returns
-    /// A `Result` containing a `Vec` of all the `Page`'s descentant `Block`s that were updated between within `dur`. Note
-    /// that this includes the `Page` `Block` itself. Also note that the order of the `Block`s is not guaranteed and
-    /// cannot be relied upon.
+    /// A `Result` containing a `Vec` of all the `Page`'s descendant `Block`s that were updated between within `dur`.
+    /// Note that the order of the `Block`s is not guaranteed and cannot be relied upon.
     pub async fn get_page_block_roots(
         &self,
         page: &Page,
-        dur: Duration,
+        cutoff: DateTime<Utc>,
     ) -> Result<Vec<Block>, NotionClientError> {
-        let cutoff = Utc::now() - dur;
         let mut block_ids_to_process = VecDeque::new();
         let mut block_roots: Vec<Block> = Vec::new();
         let mut already_visited: HashSet<String> = HashSet::new();
@@ -130,14 +131,16 @@ impl Notion {
 
         while let Some(block_id) = block_ids_to_process.pop_front() {
             if already_visited.contains(&block_id) {
+                // we've already processed this block, so skip it
                 trace!(
                     target: "notion",
                     "already visited this block {}, skipping it...",
                     &block_id
                 );
-                // we've already processed this block, so skip it
                 continue;
             }
+            already_visited.insert(block_id.clone());
+
             trace!(
                 target: "notion",
                 "getting block root with id {}",
@@ -148,12 +151,10 @@ impl Notion {
                 .await?;
 
             for block in children {
+                // was the Block last edited within our cutoff duration?
                 if block.update_date >= cutoff {
-                    // is the Block's edit time within the duration?
-                    if !block.is_empty() {
-                        // note, there may be further descendants of this block that were
-                        // edited within the duration, but we will process those in a later
-                        // function
+                    if !block.is_empty() && !already_visited.contains(&block.id) {
+                        already_visited.insert(block.id.clone());
                         block_roots.push(block);
                     }
                 } else {
@@ -162,18 +163,15 @@ impl Notion {
                 }
             }
 
-            already_visited.insert(block_id);
-
             if Utc::now() > abort_time {
                 // we've spent too much time fetching children, so just return what we have
                 debug!(target: "notion", "aborting block retrieval due to time limit");
-                debug!(target: "notion", "returning {} block roots for page: {}", block_roots.len(), page.title);
                 break;
             }
         }
 
-        debug!(target: "notion", "fetched {} descendant Blocks from Page {}", block_roots.len(), page.url);
-        debug!(target: "notion", "{:#?}", block_roots);
+        debug!(target: "notion", "fetched {} descendant Blocks from Page {}", block_roots.len(), page.title);
+        trace!(target: "notion", "{:#?}", block_roots);
 
         Ok(block_roots)
     }
@@ -202,7 +200,7 @@ impl Notion {
     ///    | |    | |   | |       | | |       | |      .
     ///    D E    F G   H I       L M N       O P      .
     /// ```
-    pub async fn grow_the_roots(
+    pub async fn expand_block_roots(
         &self,
         block_roots: Vec<Block>,
     ) -> Result<Vec<Tree<Block>>, NotionClientError> {
@@ -215,19 +213,26 @@ impl Notion {
             queue.push_back(root);
             while let Some(node) = queue.pop_front() {
                 let grant = node.tree().grant_hierarchy_edit().unwrap();
+                let borrowed_node = node.borrow_data();
+                trace!(
+                    target: "notion",
+                    "Notion::expand_block_roots expanding block {:?}",
+                    borrowed_node
+                );
 
-                // TODO: figure out how to make this more efficient by not copying every block value
-                let page_id = node.borrow_data().page_id.clone();
-                let block_id = node.borrow_data().id.clone();
-                let has_children = node.borrow_data().has_children;
+                // TODO: figure out how to make this more efficient by not cloning
+                let page_id = borrowed_node.page_id.clone();
+                let block_id = borrowed_node.id.clone();
+                let has_children = borrowed_node.has_children;
 
                 if has_children {
                     let children = self
                         .retrieve_all_block_children(&page_id, &block_id)
                         .await?;
                     for child in children {
-                        node.create_as_last_child(&grant, child);
-                        queue.push_back(node.last_child().unwrap());
+                        let new_node = node.create_as_last_child(&grant, child);
+                        debug_assert_eq!(new_node, node.last_child().unwrap());
+                        queue.push_back(new_node);
                     }
                 }
             }

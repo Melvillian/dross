@@ -1,6 +1,6 @@
 
 <div align="center">
-  <img src="img/dross.webp">
+  <img src="img/navi.webp">
 </div>
 
 # Dross (In Rust 🦀)
