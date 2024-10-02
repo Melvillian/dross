@@ -1,8 +1,11 @@
 use chrono::{Duration, Utc};
 use dotenv::dotenv;
-use dross::{core::helpers::build_markdown_from_trees, notion::Notion};
+use dross::{
+    core::{datatypes::Block, helpers::build_markdown_from_trees},
+    notion::Notion,
+};
 use log::{debug, info, trace};
-use std::env;
+use std::{collections::HashSet, env};
 
 #[tokio::main]
 async fn main() {
@@ -44,6 +47,19 @@ async fn main() {
         info!(target: "notion", "expanding {} block roots for page: {}", block_roots.len(), page.title);
         trace!(target: "notion", "the block roots look like: {:?}", block_roots.iter().map(|b| (&b.text, &b.id, &b.block_type)).collect::<Vec<_>>());
         let trees = notion.expand_block_roots(block_roots).await.unwrap();
+
+        let mut duplicate_checker: HashSet<Block> = HashSet::new();
+        for tree in &trees {
+            let prohibition = tree.prohibit_hierarchy_edit().unwrap();
+            let root_frozen_node = tree.root().bundle_hierarchy_edit_prohibition(&prohibition);
+            for (frozen_node, _depth) in
+                root_frozen_node.allocating_breadth_first_traverse_stable(0)
+            {
+                if !duplicate_checker.insert(frozen_node.borrow_data().clone()) {
+                    info!(target: "notion", "Found duplicate block: {:?}", frozen_node.borrow_data());
+                }
+            }
+        }
 
         let single_page_prompt_markdown = build_markdown_from_trees(trees);
         every_prompt_markdown.push(format!(

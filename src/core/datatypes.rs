@@ -15,6 +15,12 @@ pub struct Block {
     pub has_children: bool,
 }
 
+impl std::hash::Hash for Block {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+    }
+}
+
 impl Block {
     #[must_use]
     pub fn from_notion_block(notion_block: NotionBlock, page_id: String) -> Self {
