@@ -721,7 +721,7 @@ dependencies = [
 [[package]]
 name = "notion-client"
 version = "1.0.2"
-source = "git+https://github.com/Melvillian/notion-client.git?branch=main#7faebf3568f7652889cfcd59ffc4824962359e75"
+source = "git+https://github.com/Melvillian/notion-client.git?branch=main#2eb60e1f48038035dea05baff0f00cd1abb2e05e"
 dependencies = [
  "chrono",
  "derive_builder",

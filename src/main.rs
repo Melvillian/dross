@@ -14,7 +14,7 @@ async fn main() {
 
     let dur: Duration = Duration::days(match env::var("RUST_LOG") {
         Ok(log_level) => match log_level.to_lowercase().as_str() {
-            "debug" | "trace" => 2,
+            "debug" | "trace" => 1,
             _ => 7,
         },
         Err(_) => 7,
