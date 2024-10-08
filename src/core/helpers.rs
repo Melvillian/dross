@@ -4,19 +4,36 @@ use dendron::{traverse::DftEvent, Tree};
 fn build_markdown_from_tree(tree: Tree<Block>, markdown: &mut String) {
     let mut depth = 0;
 
+    let mut duplicates = std::collections::HashSet::new();
+
     for evt in tree.root().depth_first_traverse() {
+        // see dendron's DFT traversal docs:
+        // https://docs.rs/dendron/0.1.5/dendron/node/struct.Node.html#method.depth_first_traverse
+        // for how DftEvents work and why we handle DftEvent::Open and DftEvent::Close differently
         match &evt {
-            DftEvent::Open(_) => {
-                depth += 1;
-            }
             DftEvent::Close(_) => {
                 depth -= 1;
             }
+            DftEvent::Open(_) => {
+                depth += 1;
+
+                let block = evt.as_value().borrow_data();
+                println!("{}", serde_json::to_value(block.clone()).unwrap());
+                let tabs = "\t".repeat(depth);
+                markdown.push_str(&format!("{}{}\n", tabs, block.to_markdown()));
+                // TODO get rid of these duplicate checkers after figuring out where the
+                // duplicates are
+                let id = block.id.clone();
+                if duplicates.contains(&id) {
+                    panic!(
+                        "uhoh, find duplicate block {} with text {}",
+                        block.id, block.text
+                    );
+                } else {
+                    duplicates.insert(id);
+                }
+            }
         }
-        let block = evt.as_value().borrow_data();
-        println!("{}", serde_json::to_value(block.clone()).unwrap());
-        let tabs = "\t".repeat(depth);
-        markdown.push_str(&format!("{}{}\n", tabs, block.to_markdown()));
     }
     assert!(depth == 0);
 }

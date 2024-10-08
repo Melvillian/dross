@@ -70,7 +70,7 @@ impl Notion {
                 .into_iter()
                 .filter_map(|page_or_db| match page_or_db {
                     PageOrDatabase::Page(page) => Some(page),
-                    PageOrDatabase::Database(_) => None,
+                    PageOrDatabase::Database(_) => None, // TODO: support databases
                 })
                 .collect::<Vec<NotionPage>>();
             if current_notion_pages.len() != res_len {
@@ -115,10 +115,10 @@ impl Notion {
         &self,
         page: &Page,
         cutoff: DateTime<Utc>,
+        duplicates_checker: &mut HashSet<String>,
     ) -> Result<Vec<Block>, NotionClientError> {
         let mut block_ids_to_process = VecDeque::new();
         let mut block_roots: Vec<Block> = Vec::new();
-        let mut already_visited: HashSet<String> = HashSet::new();
 
         // some user's Pages are huuuge, so long that we don't know if we'll spend too much time
         // much time fetching all their children. So, as a heuristic for when to abort we use
@@ -130,7 +130,7 @@ impl Notion {
         block_ids_to_process.push_back(page.id.clone());
 
         while let Some(block_id) = block_ids_to_process.pop_front() {
-            if already_visited.contains(&block_id) {
+            if duplicates_checker.contains(&block_id) {
                 // we've already processed this block, so skip it
                 trace!(
                     target: "notion",
@@ -139,7 +139,7 @@ impl Notion {
                 );
                 continue;
             }
-            already_visited.insert(block_id.clone());
+            duplicates_checker.insert(block_id.clone());
 
             trace!(
                 target: "notion",
@@ -153,14 +153,14 @@ impl Notion {
             for block in children {
                 // was the Block last edited within our cutoff duration?
                 if block.update_date >= cutoff {
-                    if !block.is_empty() && !already_visited.contains(&block.id) {
-                        already_visited.insert(block.id.clone());
-                        block_roots.push(block);
+                    if !block.is_empty() && !duplicates_checker.contains(&block.id) {
+                        block_roots.push(block.clone());
                     }
                 } else {
                     // keep recursing down the tree of children blocks
-                    block_ids_to_process.push_back(block.id);
+                    block_ids_to_process.push_back(block.id.clone());
                 }
+                duplicates_checker.insert(block.id);
             }
 
             if Utc::now() > abort_time {
@@ -174,6 +174,55 @@ impl Notion {
         trace!(target: "notion", "{:#?}", block_roots);
 
         Ok(block_roots)
+    }
+
+    async fn expand_block_root(
+        &self,
+        block_root: Node<Block>,
+        duplicates_checker: &mut HashSet<String>,
+    ) -> Result<(), NotionClientError> {
+        let mut queue = VecDeque::new();
+
+        queue.push_back(block_root);
+        while let Some(node) = queue.pop_front() {
+            let grant = node.tree().grant_hierarchy_edit().unwrap();
+            let borrowed_node = node.borrow_data();
+            dbg!(&borrowed_node);
+
+            if duplicates_checker.contains(&borrowed_node.id) {
+                // Note: this is kind of a hack, because I'm seeing duplicate blocks from a single block root,
+                // and the solution here is it just skips over the duplicate, which is not ideal.
+                // In the future we should figure out what's going on here and actually do it right, but I'm
+                // following make it work, make it right, make it fast, and I'm still trying to make it work.
+                continue;
+            }
+            duplicates_checker.insert(borrowed_node.id.clone());
+
+            trace!(
+                target: "notion",
+                "Notion::expand_block_roots expanding block {:?}",
+                borrowed_node
+            );
+
+            // TODO: figure out how to make this more efficient by not cloning
+            let page_id = borrowed_node.page_id.clone();
+            let block_id = borrowed_node.id.clone();
+            let has_children = borrowed_node.has_children;
+
+            if has_children {
+                let children = self
+                    .retrieve_all_block_children(&page_id, &block_id)
+                    .await?;
+                for child in children {
+                    dbg!(&child);
+                    let new_node = node.create_as_last_child(&grant, child);
+                    debug_assert_eq!(new_node, node.last_child().unwrap());
+                    queue.push_back(new_node);
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Given a `Vec` of `Block`s (call these `Block`s "roots") that have been updated recently,
@@ -204,41 +253,17 @@ impl Notion {
         &self,
         block_roots: Vec<Block>,
     ) -> Result<Vec<Tree<Block>>, NotionClientError> {
-        let mut blossomed_roots = Vec::new();
+        let mut expanded_roots = Vec::new();
+        let mut duplicates_checker: HashSet<String> = HashSet::new();
         for block in block_roots {
             let root = Node::new_tree(block);
-            blossomed_roots.push(root.tree());
-            let mut queue = VecDeque::new();
+            expanded_roots.push(root.tree());
 
-            queue.push_back(root);
-            while let Some(node) = queue.pop_front() {
-                let grant = node.tree().grant_hierarchy_edit().unwrap();
-                let borrowed_node = node.borrow_data();
-                trace!(
-                    target: "notion",
-                    "Notion::expand_block_roots expanding block {:?}",
-                    borrowed_node
-                );
-
-                // TODO: figure out how to make this more efficient by not cloning
-                let page_id = borrowed_node.page_id.clone();
-                let block_id = borrowed_node.id.clone();
-                let has_children = borrowed_node.has_children;
-
-                if has_children {
-                    let children = self
-                        .retrieve_all_block_children(&page_id, &block_id)
-                        .await?;
-                    for child in children {
-                        let new_node = node.create_as_last_child(&grant, child);
-                        debug_assert_eq!(new_node, node.last_child().unwrap());
-                        queue.push_back(new_node);
-                    }
-                }
-            }
+            self.expand_block_root(root, &mut duplicates_checker)
+                .await?;
         }
 
-        Ok(blossomed_roots)
+        Ok(expanded_roots)
     }
 
     /// Retrieves all of the children (potentially multiple pages worth) of a Block with the given ID.

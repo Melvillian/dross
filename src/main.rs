@@ -2,7 +2,7 @@ use chrono::{Duration, Utc};
 use dotenv::dotenv;
 use dross::{core::helpers::build_markdown_from_trees, notion::Notion};
 use log::{debug, info, trace};
-use std::env;
+use std::{collections::HashSet, env};
 
 #[tokio::main]
 async fn main() {
@@ -11,7 +11,7 @@ async fn main() {
 
     let dur: Duration = Duration::hours(match env::var("RUST_LOG") {
         Ok(log_level) => match log_level.to_lowercase().as_str() {
-            "debug" | "trace" => 1,
+            "debug" | "trace" => 4,
             _ => 7,
         },
         Err(_) => 7,
@@ -27,17 +27,26 @@ async fn main() {
     let pages_edited_after_cutoff_date = notion.get_last_edited_pages(cutoff).await.unwrap();
     info!(target: "notion", "retrieved {} Pages edited in the last {} days", pages_edited_after_cutoff_date.len(), dur.num_days());
     let mut pages_and_block_roots = Vec::new();
-    // TODO: instead of storing the whole Block data, which is 95% worthless data, just strip out the
+
+    // TODO: idea: instead of storing the whole Block data, which is 95% worthless data, just strip out the
     // text and id, store that in a struct, and use that to build the markdown
+
+    let mut duplicates_checker: HashSet<String> = HashSet::new();
     for page in pages_edited_after_cutoff_date {
         debug!(target: "notion", "Page URL: {}", page.url);
 
-        let new_block_roots = notion.get_page_block_roots(&page, cutoff).await.unwrap();
+        let new_block_roots = notion
+            .get_page_block_roots(&page, cutoff, &mut duplicates_checker)
+            .await
+            .unwrap();
         info!(target: "notion", "found {} new block roots for page: {}",  new_block_roots.len(), page.title);
         if new_block_roots.len() > 0 {
+            dbg!(&new_block_roots);
             pages_and_block_roots.push((page, new_block_roots));
         }
     }
+
+    // TODO: OK AT THIS POINT THERE ARE NO DUPES
 
     debug!(target: "notion", "retrieved {} pages with non-empty block roots, now we will expand them!", pages_and_block_roots.len());
 
