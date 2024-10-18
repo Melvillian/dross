@@ -6,6 +6,11 @@ fn build_markdown_from_tree(tree: Tree<Block>, markdown: &mut String) {
 
     let mut duplicates = std::collections::HashSet::new();
 
+    println!(
+        "building markdown for tree with block id: {}",
+        tree.root().borrow_data().id
+    );
+
     for evt in tree.root().depth_first_traverse() {
         // see dendron's DFT traversal docs:
         // https://docs.rs/dendron/0.1.5/dendron/node/struct.Node.html#method.depth_first_traverse
@@ -18,7 +23,10 @@ fn build_markdown_from_tree(tree: Tree<Block>, markdown: &mut String) {
                 depth += 1;
 
                 let block = evt.as_value().borrow_data();
-                println!("{}", serde_json::to_value(block.clone()).unwrap());
+                println!(
+                    "{:?}",
+                    (&block.id, block.text.clone().truncate(10), &block.page_id)
+                );
                 let tabs = "\t".repeat(depth);
                 markdown.push_str(&format!("{}{}\n", tabs, block.to_markdown()));
                 // TODO get rid of these duplicate checkers after figuring out where the

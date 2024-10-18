@@ -2,6 +2,7 @@ use chrono::{Duration, Utc};
 use dotenv::dotenv;
 use dross::{core::helpers::build_markdown_from_trees, notion::Notion};
 use log::{debug, info, trace};
+use serde::Serialize;
 use std::{collections::HashSet, env};
 
 #[tokio::main]
@@ -11,10 +12,10 @@ async fn main() {
 
     let dur: Duration = Duration::hours(match env::var("RUST_LOG") {
         Ok(log_level) => match log_level.to_lowercase().as_str() {
-            "debug" | "trace" => 4,
-            _ => 7,
+            "debug" | "trace" => 1,
+            _ => 1,
         },
-        Err(_) => 7,
+        Err(_) => 1,
     }); // TODO, make this a CLI arg, for now we're just differentiating
         // between DEBUG and non-debug to speed iterating on debugging
 
@@ -39,9 +40,10 @@ async fn main() {
             .get_page_block_roots(&page, cutoff, &mut duplicates_checker)
             .await
             .unwrap();
-        info!(target: "notion", "found {} new block roots for page: {}",  new_block_roots.len(), page.title);
+
         if new_block_roots.len() > 0 {
-            dbg!(&new_block_roots);
+            info!(target: "notion", "found {} new block roots for page: {}",  new_block_roots.len(), page.title);
+            debug!(target: "notion", "the block roots look like: {:?}", new_block_roots.iter().map(|b| (&b.text, &b.id,)).collect::<Vec<_>>());
             pages_and_block_roots.push((page, new_block_roots));
         }
     }

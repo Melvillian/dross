@@ -11,7 +11,7 @@ pub struct Block {
     pub text: String,
     pub creation_date: DateTime<Utc>,
     pub update_date: DateTime<Utc>,
-    pub parent_block_id: Option<String>,
+    pub parent: Option<Parent>,
     pub has_children: bool,
 }
 
@@ -44,10 +44,7 @@ impl Block {
                 .join(" "), // TODO: a space " " separator is not always appropriate, but works for now. Find a better way to join the text
             creation_date: notion_block.created_time.unwrap_or_default(),
             update_date: notion_block.last_edited_time.unwrap_or_default(),
-            parent_block_id: notion_block.parent.and_then(|parent| match parent {
-                Parent::BlockId { block_id } => Some(block_id),
-                _ => None,
-            }),
+            parent: notion_block.parent,
             has_children: notion_block.has_children.unwrap_or_default(),
         }
     }
@@ -107,7 +104,7 @@ mod tests {
                 text: "Heading 1".to_string(),
                 creation_date: Utc::now(),
                 update_date: Utc::now(),
-                parent_block_id: None,
+                parent: None,
                 has_children: false,
                 page_id: "7b1b3b0c-14cb-45a6-a4b6-d2b48faecccb".to_string(),
             },
@@ -119,7 +116,7 @@ mod tests {
                 text: "Heading 2".to_string(),
                 creation_date: Utc::now(),
                 update_date: Utc::now(),
-                parent_block_id: None,
+                parent: None,
                 has_children: false,
                 page_id: "7b1b3b0c-14cb-45a6-a4b6-d2b48faecccb".to_string(),
             },
@@ -143,7 +140,7 @@ mod tests {
                 text: "Bullet point".to_string(),
                 creation_date: Utc::now(),
                 update_date: Utc::now(),
-                parent_block_id: None,
+                parent: None,
                 has_children: false,
                 page_id: "7b1b3b0c-14cb-45a6-a4b6-d2b48faecccb".to_string(),
             },
@@ -155,7 +152,7 @@ mod tests {
                 text: "Normal text".to_string(),
                 creation_date: Utc::now(),
                 update_date: Utc::now(),
-                parent_block_id: None,
+                parent: None,
                 has_children: false,
                 page_id: "7b1b3b0c-14cb-45a6-a4b6-d2b48faecccb".to_string(),
             },

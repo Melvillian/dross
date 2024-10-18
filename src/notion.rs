@@ -11,7 +11,7 @@ use notion_client::{
         },
         Client,
     },
-    objects::page::Page as NotionPage,
+    objects::{page::Page as NotionPage, parent::Parent},
     NotionClientError,
 };
 use std::collections::{HashSet, VecDeque};
@@ -130,8 +130,10 @@ impl Notion {
         block_ids_to_process.push_back(page.id.clone());
 
         while let Some(block_id) = block_ids_to_process.pop_front() {
+            // traversing blocks in Notion is a complicated process, so complicated that we
+            // don't know if there are cycles and we're going to get stuck in an infinite loop.
+            // To prevent that, we check for duplicates and skip them, which also breaks the loop
             if duplicates_checker.contains(&block_id) {
-                // we've already processed this block, so skip it
                 trace!(
                     target: "notion",
                     "already visited this block {}, skipping it...",
@@ -143,7 +145,7 @@ impl Notion {
 
             trace!(
                 target: "notion",
-                "getting block root with id {}",
+                "fetching children block roots of block with id {}",
                 &block_id
             );
             let children = self
@@ -156,7 +158,7 @@ impl Notion {
                     if !block.is_empty() && !duplicates_checker.contains(&block.id) {
                         block_roots.push(block.clone());
                     }
-                } else {
+                } else if block.has_children {
                     // keep recursing down the tree of children blocks
                     block_ids_to_process.push_back(block.id.clone());
                 }
@@ -164,7 +166,10 @@ impl Notion {
             }
 
             if Utc::now() > abort_time {
-                // we've spent too much time fetching children, so just return what we have
+                // we've spent too much time fetching children, so stop recursing and reeturn
+                // the (truncated) block roots that we have. This means we may miss out on
+                // important blocks that were updated since the cutoff, but that's the price
+                // we pay in order to limit the time we spend fetching block children.
                 debug!(target: "notion", "aborting block retrieval due to time limit");
                 break;
             }
@@ -349,4 +354,18 @@ impl Notion {
                 .await?,
         })
     }
+
+    // pub async fn search_for_page_id(&self, block: &Block) -> Result<String, NotionClientError> {
+    //     if block.parent.is_none() {
+    //         return Err(NotionClientError::InvalidParentBlock);
+    //     }
+    //     match &block.parent {
+    //         Parent::PageId { page_id } => Ok(page_id.to_string()),
+    //         Parent::Workspace { workspace: _ } => Ok(block.id.clone()),
+    //         Parent::DatabaseId { database_id: _ } => {
+    //             let parent_block =
+    //                 Block::from_notion_block(self.client.blocks.retrieve_a_block(block_id).await?);
+    //         }
+    //     }
+    // }
 }
