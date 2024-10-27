@@ -32,6 +32,8 @@ impl Block {
             page_id,
             block_type: notion_block.block_type.clone(),
             // this is where the actual Block data is
+            // TODO: instead of losing the data about Notion backlinks, as we're currently doing,
+            // we should return a more general object that retains the info about Notion backlinks
             text: notion_block
                 .block_type
                 // TODO: notion-client mushes all of the text of certain BlockTypes (NumberedListItem, BulletListItem, Toggle, ToDo,

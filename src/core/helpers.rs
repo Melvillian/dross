@@ -1,12 +1,14 @@
 use super::datatypes::Block;
 use dendron::{traverse::DftEvent, Tree};
+use log::debug;
 
 fn build_markdown_from_tree(tree: Tree<Block>, markdown: &mut String) {
     let mut depth = 0;
 
     let mut duplicates = std::collections::HashSet::new();
 
-    println!(
+    debug!(
+        target: "helpers",
         "building markdown for tree with block id: {}",
         tree.root().borrow_data().id
     );
@@ -23,7 +25,8 @@ fn build_markdown_from_tree(tree: Tree<Block>, markdown: &mut String) {
                 depth += 1;
 
                 let block = evt.as_value().borrow_data();
-                println!(
+                debug!(
+                    target: "helpers",
                     "{:?}",
                     (&block.id, block.text.clone().truncate(10), &block.page_id)
                 );
@@ -33,6 +36,10 @@ fn build_markdown_from_tree(tree: Tree<Block>, markdown: &mut String) {
                 // duplicates are
                 let id = block.id.clone();
                 if duplicates.contains(&id) {
+                    debug!(
+                        target: "dendron",
+                        "markdown prior to duplicate panic:\n{}", markdown
+                    );
                     panic!(
                         "uhoh, find duplicate block {} with text {}",
                         block.id, block.text

@@ -192,9 +192,10 @@ impl Notion {
         while let Some(node) = queue.pop_front() {
             let grant = node.tree().grant_hierarchy_edit().unwrap();
             let borrowed_node = node.borrow_data();
-            dbg!(&borrowed_node);
+            debug!(target: "notion", "borrowed_node: {:?}", (&borrowed_node.id, &borrowed_node.text));
 
             if duplicates_checker.contains(&borrowed_node.id) {
+                debug!(target: "notion", "already visited this block {:?}, skipping it...", (&borrowed_node.id, &borrowed_node.clone().text.truncate(10)));
                 // Note: this is kind of a hack, because I'm seeing duplicate blocks from a single block root,
                 // and the solution here is it just skips over the duplicate, which is not ideal.
                 // In the future we should figure out what's going on here and actually do it right, but I'm
@@ -203,23 +204,29 @@ impl Notion {
             }
             duplicates_checker.insert(borrowed_node.id.clone());
 
-            trace!(
-                target: "notion",
-                "Notion::expand_block_roots expanding block {:?}",
-                borrowed_node
-            );
+            if borrowed_node.has_children {
+                // TODO: figure out how to make this more efficient by not cloning
+                let page_id = borrowed_node.page_id.clone();
+                let block_id = borrowed_node.id.clone();
 
-            // TODO: figure out how to make this more efficient by not cloning
-            let page_id = borrowed_node.page_id.clone();
-            let block_id = borrowed_node.id.clone();
-            let has_children = borrowed_node.has_children;
-
-            if has_children {
                 let children = self
                     .retrieve_all_block_children(&page_id, &block_id)
                     .await?;
                 for child in children {
-                    dbg!(&child);
+                    if duplicates_checker.contains(&borrowed_node.id) {
+                        debug!(target: "notion", "already visited this block {:?}, skipping it...", (&borrowed_node.id, &borrowed_node.clone().text.truncate(10)));
+
+                        // Note: this is kind of a hack, because I'm seeing duplicate blocks from a single block root,
+                        // and the solution here is it just skips over the duplicate, which is not ideal.
+                        // In the future we should figure out what's going on here and actually do it right, but I'm
+                        // following make it work, make it right, make it fast, and I'm still trying to make it work.
+
+                        // I think the next step in debugging is looking at why the children of a Toggle type block
+                        // include the same id block as the block_root.... yes, that made nonse :shrug.
+                        continue;
+                    }
+                    duplicates_checker.insert(borrowed_node.id.clone());
+
                     let new_node = node.create_as_last_child(&grant, child);
                     debug_assert_eq!(new_node, node.last_child().unwrap());
                     queue.push_back(new_node);

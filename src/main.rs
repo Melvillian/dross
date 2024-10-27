@@ -2,7 +2,6 @@ use chrono::{Duration, Utc};
 use dotenv::dotenv;
 use dross::{core::helpers::build_markdown_from_trees, notion::Notion};
 use log::{debug, info, trace};
-use serde::Serialize;
 use std::{collections::HashSet, env};
 
 #[tokio::main]
@@ -50,12 +49,13 @@ async fn main() {
 
     // TODO: OK AT THIS POINT THERE ARE NO DUPES
 
-    debug!(target: "notion", "retrieved {} pages with non-empty block roots, now we will expand them!", pages_and_block_roots.len());
+    debug!(target: "notion", "retrieved {} pages with non-empty block roots, now we will expand them", pages_and_block_roots.len());
+    debug!(target: "notion", "the pages and block roots look like:\n{:#?}", pages_and_block_roots.iter().map(|(p, br)| (&p.title, br.iter().map(|b| (b.id.clone(), b.text.clone())).collect::<Vec<_>>())).collect::<Vec<_>>());
 
     let mut every_prompt_markdown = Vec::new();
     for (page, block_roots) in pages_and_block_roots {
         info!(target: "notion", "expanding {} block roots for page: {}", block_roots.len(), page.title);
-        trace!(target: "notion", "the block roots look like: {:?}", block_roots.iter().map(|b| (&b.text, &b.id, &b.block_type)).collect::<Vec<_>>());
+        trace!(target: "notion", "the block roots look like: {:#?}", block_roots.iter().map(|b| (&b.text, &b.id, &b.block_type)).collect::<Vec<_>>());
         let trees = notion.expand_block_roots(block_roots).await.unwrap();
 
         let single_page_prompt_markdown = build_markdown_from_trees(trees);
