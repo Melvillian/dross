@@ -1,12 +1,33 @@
 use chrono::{DateTime, Utc};
+use derive_more::{Deref, Display};
 use notion_client::objects::block::{Block as NotionBlock, BlockType};
 use notion_client::objects::parent::Parent;
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Hash, Display, Deref)]
+pub struct PageID(String);
+
+impl PageID {
+    #[must_use]
+    pub fn new(id: String) -> Self {
+        PageID(id)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Hash, Display, Deref)]
+pub struct BlockID(String);
+
+impl BlockID {
+    #[must_use]
+    pub fn new(id: String) -> Self {
+        BlockID(id)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 pub struct Block {
-    pub id: String,
-    pub page_id: String,
+    pub id: BlockID,
+    pub page_id: PageID,
     pub block_type: BlockType,
     pub text: String,
     pub creation_date: DateTime<Utc>,
@@ -17,7 +38,7 @@ pub struct Block {
 
 impl std::hash::Hash for Block {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.id.hash(state);
+        self.id.0.hash(state);
     }
 }
 
@@ -25,11 +46,11 @@ impl Block {
     #[must_use]
     pub fn from_notion_block(notion_block: NotionBlock, page_id: String) -> Self {
         Block {
-            id: notion_block.id.unwrap_or_default(),
+            id: BlockID(notion_block.id.unwrap_or_default()),
             // TODO: consider removing this, since it is stored multiple times
             // throughout all the blocks, and we don't need it specifically on a block
             // it's a nice-to-have right now
-            page_id,
+            page_id: PageID(page_id),
             block_type: notion_block.block_type.clone(),
             // this is where the actual Block data is
             // TODO: instead of losing the data about Notion backlinks, as we're currently doing,
@@ -78,7 +99,7 @@ impl Block {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 pub struct Page {
-    pub id: String,
+    pub id: PageID,
     pub title: String,
     pub url: String,
     pub creation_date: DateTime<Utc>,
@@ -99,7 +120,7 @@ mod tests {
     fn test_block_to_markdown() {
         let blocks = vec![
             Block {
-                id: "1".to_string(),
+                id: BlockID("1".to_string()),
                 block_type: BlockType::Heading1 {
                     heading_1: Default::default(),
                 },
@@ -108,10 +129,10 @@ mod tests {
                 update_date: Utc::now(),
                 parent: None,
                 has_children: false,
-                page_id: "7b1b3b0c-14cb-45a6-a4b6-d2b48faecccb".to_string(),
+                page_id: PageID("7b1b3b0c-14cb-45a6-a4b6-d2b48faecccb".to_string()),
             },
             Block {
-                id: "2".to_string(),
+                id: BlockID("2".to_string()),
                 block_type: BlockType::Heading2 {
                     heading_2: Default::default(),
                 },
@@ -120,10 +141,10 @@ mod tests {
                 update_date: Utc::now(),
                 parent: None,
                 has_children: false,
-                page_id: "7b1b3b0c-14cb-45a6-a4b6-d2b48faecccb".to_string(),
+                page_id: PageID("7b1b3b0c-14cb-45a6-a4b6-d2b48faecccb".to_string()),
             },
             Block {
-                id: "3".to_string(),
+                id: BlockID("3".to_string()),
                 block_type: BlockType::BulletedListItem {
                     bulleted_list_item: BulletedListItemValue {
                         rich_text: vec![RichText::Text {
@@ -144,10 +165,10 @@ mod tests {
                 update_date: Utc::now(),
                 parent: None,
                 has_children: false,
-                page_id: "7b1b3b0c-14cb-45a6-a4b6-d2b48faecccb".to_string(),
+                page_id: PageID("7b1b3b0c-14cb-45a6-a4b6-d2b48faecccb".to_string()),
             },
             Block {
-                id: "4".to_string(),
+                id: BlockID("4".to_string()),
                 block_type: BlockType::Paragraph {
                     paragraph: Default::default(),
                 },
@@ -156,7 +177,7 @@ mod tests {
                 update_date: Utc::now(),
                 parent: None,
                 has_children: false,
-                page_id: "7b1b3b0c-14cb-45a6-a4b6-d2b48faecccb".to_string(),
+                page_id: PageID("7b1b3b0c-14cb-45a6-a4b6-d2b48faecccb".to_string()),
             },
         ];
 

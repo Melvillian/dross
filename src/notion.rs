@@ -1,7 +1,7 @@
-use crate::core::datatypes::{Block, Page};
+use crate::core::datatypes::{Block, BlockID, Page, PageID};
 use chrono::{DateTime, Duration, Utc};
 use dendron::{Node, Tree};
-use log::{debug, error, trace};
+use log::{debug, error, info, trace};
 use notion_client::{
     endpoints::{
         blocks::retrieve::response::RetrieveBlockChilerenResponse,
@@ -11,7 +11,7 @@ use notion_client::{
         },
         Client,
     },
-    objects::{page::Page as NotionPage, parent::Parent},
+    objects::page::Page as NotionPage,
     NotionClientError,
 };
 use std::collections::{HashSet, VecDeque};
@@ -115,9 +115,9 @@ impl Notion {
         &self,
         page: &Page,
         cutoff: DateTime<Utc>,
-        duplicates_checker: &mut HashSet<String>,
+        duplicates_checker: &mut HashSet<Block>,
     ) -> Result<Vec<Block>, NotionClientError> {
-        let mut block_ids_to_process = VecDeque::new();
+        let mut blocks_to_process = VecDeque::from(page.child_blocks.clone());
         let mut block_roots: Vec<Block> = Vec::new();
 
         // some user's Pages are huuuge, so long that we don't know if we'll spend too much time
@@ -127,51 +127,53 @@ impl Notion {
         let time_to_spend_fetching_children = Duration::seconds(30);
         let abort_time = Utc::now() + time_to_spend_fetching_children;
 
-        block_ids_to_process.push_back(page.id.clone());
-
-        while let Some(block_id) = block_ids_to_process.pop_front() {
-            // traversing blocks in Notion is a complicated process, so complicated that we
-            // don't know if there are cycles and we're going to get stuck in an infinite loop.
-            // To prevent that, we check for duplicates and skip them, which also breaks the loop
-            if duplicates_checker.contains(&block_id) {
-                trace!(
-                    target: "notion",
-                    "already visited this block {}, skipping it...",
-                    &block_id
-                );
-                continue;
-            }
-            duplicates_checker.insert(block_id.clone());
-
-            trace!(
-                target: "notion",
-                "fetching children block roots of block with id {}",
-                &block_id
-            );
-            let children = self
-                .retrieve_all_block_children(&page.id, &block_id)
-                .await?;
-
-            for block in children {
-                // was the Block last edited within our cutoff duration?
-                if block.update_date >= cutoff {
-                    if !block.is_empty() && !duplicates_checker.contains(&block.id) {
-                        block_roots.push(block.clone());
-                    }
-                } else if block.has_children {
-                    // keep recursing down the tree of children blocks
-                    block_ids_to_process.push_back(block.id.clone());
-                }
-                duplicates_checker.insert(block.id);
-            }
-
+        while let Some(block) = blocks_to_process.pop_front() {
             if Utc::now() > abort_time {
                 // we've spent too much time fetching children, so stop recursing and reeturn
                 // the (truncated) block roots that we have. This means we may miss out on
                 // important blocks that were updated since the cutoff, but that's the price
                 // we pay in order to limit the time we spend fetching block children.
-                debug!(target: "notion", "aborting block retrieval due to time limit");
+                info!(target: "notion", "aborting block retrieval due to time limit");
                 break;
+            }
+
+            // traversing blocks in Notion is a complicated process, so complicated that we
+            // don't know if there are cycles and we're going to get stuck in an infinite loop.
+            // To prevent that, we check for duplicates and skip them, which also breaks the loop
+            if duplicates_checker.contains(&block) {
+                trace!(
+                    target: "notion",
+                    "already visited this block {}, skipping it...",
+                    &block.id
+                );
+                continue;
+            }
+            duplicates_checker.insert(block.clone());
+            trace!(target: "notion", "duplicates_checker.insert({})", &block.id);
+
+            // was the Block last edited within our cutoff duration?
+            if block.update_date >= cutoff {
+                if !block.is_empty() {
+                    block_roots.push(block.clone());
+                }
+                continue;
+            }
+
+            if block.has_children {
+                trace!(
+                    target: "notion",
+                    "fetching children block roots of block with id {}",
+                    &block.id
+                );
+                let children = self
+                    .retrieve_all_block_children(&block.id, &page.id)
+                    .await?;
+
+                for child_block in children {
+                    trace!(target: "notion", "get_page_block_roots::fetched child block: (id: {}, text: {:?})", &child_block.id, &child_block.text);
+                    // keep recursing down the tree of children blocks
+                    blocks_to_process.push_back(child_block.clone());
+                }
             }
         }
 
@@ -184,18 +186,17 @@ impl Notion {
     async fn expand_block_root(
         &self,
         block_root: Node<Block>,
-        duplicates_checker: &mut HashSet<String>,
+        duplicates_checker: &mut HashSet<BlockID>,
     ) -> Result<(), NotionClientError> {
-        let mut queue = VecDeque::new();
+        let mut queue = VecDeque::from(vec![block_root]);
 
-        queue.push_back(block_root);
         while let Some(node) = queue.pop_front() {
             let grant = node.tree().grant_hierarchy_edit().unwrap();
             let borrowed_node = node.borrow_data();
             debug!(target: "notion", "borrowed_node: {:?}", (&borrowed_node.id, &borrowed_node.text));
 
             if duplicates_checker.contains(&borrowed_node.id) {
-                debug!(target: "notion", "already visited this block {:?}, skipping it...", (&borrowed_node.id, &borrowed_node.clone().text.truncate(10)));
+                debug!(target: "notion", "already visited this block {:?}, skipping it...", (&borrowed_node.id, &borrowed_node.text));
                 // Note: this is kind of a hack, because I'm seeing duplicate blocks from a single block root,
                 // and the solution here is it just skips over the duplicate, which is not ideal.
                 // In the future we should figure out what's going on here and actually do it right, but I'm
@@ -210,7 +211,7 @@ impl Notion {
                 let block_id = borrowed_node.id.clone();
 
                 let children = self
-                    .retrieve_all_block_children(&page_id, &block_id)
+                    .retrieve_all_block_children(&block_id, &page_id)
                     .await?;
                 for child in children {
                     if duplicates_checker.contains(&borrowed_node.id) {
@@ -266,7 +267,7 @@ impl Notion {
         block_roots: Vec<Block>,
     ) -> Result<Vec<Tree<Block>>, NotionClientError> {
         let mut expanded_roots = Vec::new();
-        let mut duplicates_checker: HashSet<String> = HashSet::new();
+        let mut duplicates_checker: HashSet<BlockID> = HashSet::new();
         for block in block_roots {
             let root = Node::new_tree(block);
             expanded_roots.push(root.tree());
@@ -284,8 +285,8 @@ impl Notion {
     /// function exists to paginate through the results and return them all at once.
     pub async fn retrieve_all_block_children(
         &self,
-        block_id: &str,
-        page_id: &str,
+        block_id: &BlockID,
+        page_id: &PageID,
     ) -> Result<Vec<Block>, NotionClientError> {
         let mut children_blocks: Vec<Block> = Vec::new();
         let mut current_cursor: Option<String> = None;
@@ -342,7 +343,7 @@ impl Notion {
         notion_page: NotionPage,
     ) -> Result<Page, NotionClientError> {
         Ok(Page {
-            id: notion_page.id.clone(),
+            id: PageID::new(notion_page.id.clone()),
             // convert https://www.notion.so/August-19-2024-651d530e07a14f9c97b4084614c5049b -> August 19 2024
             // Note: yes, this is kinda hacky and won't work for every page title, but it's good enough
             // for getting the gist of what the page is called
@@ -357,22 +358,11 @@ impl Notion {
             creation_date: notion_page.created_time,
             update_date: notion_page.last_edited_time,
             child_blocks: self
-                .retrieve_all_block_children(&notion_page.id, &notion_page.id)
+                .retrieve_all_block_children(
+                    &BlockID::new(notion_page.id.clone()),
+                    &PageID::new(notion_page.id),
+                )
                 .await?,
         })
     }
-
-    // pub async fn search_for_page_id(&self, block: &Block) -> Result<String, NotionClientError> {
-    //     if block.parent.is_none() {
-    //         return Err(NotionClientError::InvalidParentBlock);
-    //     }
-    //     match &block.parent {
-    //         Parent::PageId { page_id } => Ok(page_id.to_string()),
-    //         Parent::Workspace { workspace: _ } => Ok(block.id.clone()),
-    //         Parent::DatabaseId { database_id: _ } => {
-    //             let parent_block =
-    //                 Block::from_notion_block(self.client.blocks.retrieve_a_block(block_id).await?);
-    //         }
-    //     }
-    // }
 }

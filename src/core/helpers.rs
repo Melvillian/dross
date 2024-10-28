@@ -9,7 +9,7 @@ fn build_markdown_from_tree(tree: Tree<Block>, markdown: &mut String) {
 
     debug!(
         target: "helpers",
-        "building markdown for tree with block id: {}",
+        "building markdown for tree with block id: {:?}",
         tree.root().borrow_data().id
     );
 
