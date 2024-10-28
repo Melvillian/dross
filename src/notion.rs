@@ -191,10 +191,12 @@ impl Notion {
         let mut queue = VecDeque::from(vec![block_root]);
 
         while let Some(node) = queue.pop_front() {
+            debug!(target: "notion", "contents of duplicates_checker: {:#?}", duplicates_checker);
             let grant = node.tree().grant_hierarchy_edit().unwrap();
             let borrowed_node = node.borrow_data();
             debug!(target: "notion", "borrowed_node: {:?}", (&borrowed_node.id, &borrowed_node.text));
 
+            debug!(target: "notion", "duplicates_checker.contains({}) == {}", &borrowed_node.id, duplicates_checker.contains(&borrowed_node.id));
             if duplicates_checker.contains(&borrowed_node.id) {
                 debug!(target: "notion", "already visited this block {:?}, skipping it...", (&borrowed_node.id, &borrowed_node.text));
                 // Note: this is kind of a hack, because I'm seeing duplicate blocks from a single block root,
@@ -203,9 +205,12 @@ impl Notion {
                 // following make it work, make it right, make it fast, and I'm still trying to make it work.
                 continue;
             }
+            debug!(target: "notion", "inserting block {:?} into duplicates_checker", &borrowed_node.id);
             duplicates_checker.insert(borrowed_node.id.clone());
 
             if borrowed_node.has_children {
+                trace!(target: "notion", "block with id {} has children, fetching them...", &borrowed_node.id);
+
                 // TODO: figure out how to make this more efficient by not cloning
                 let page_id = borrowed_node.page_id.clone();
                 let block_id = borrowed_node.id.clone();
@@ -214,30 +219,25 @@ impl Notion {
                     .retrieve_all_block_children(&block_id, &page_id)
                     .await?;
                 for child in children {
-                    if duplicates_checker.contains(&borrowed_node.id) {
-                        debug!(target: "notion", "already visited this block {:?}, skipping it...", (&borrowed_node.id, &borrowed_node.clone().text.truncate(10)));
+                    debug!(target: "notion", "child: {:?}", (&child.id, &child.text));
+                    if duplicates_checker.contains(&child.id) {
+                        debug!(target: "notion", "already visited this child block {:?}, skipping it...", (&child.id, &child.text));
 
-                        // Note: this is kind of a hack, because I'm seeing duplicate blocks from a single block root,
-                        // and the solution here is it just skips over the duplicate, which is not ideal.
-                        // In the future we should figure out what's going on here and actually do it right, but I'm
-                        // following make it work, make it right, make it fast, and I'm still trying to make it work.
-
-                        // I think the next step in debugging is looking at why the children of a Toggle type block
-                        // include the same id block as the block_root.... yes, that made nonse :shrug.
+                        // Note: this is kind of a hack, because I should diagnose why we're seeing duplicate blocks
+                        // and stop it at its source. However, I'm following make it work, make it right, make it fast,
+                        // and this is a simple way to prevent duplicates from being added to the tree.
                         continue;
+                    } else {
+                        let new_node = node.create_as_last_child(&grant, child);
+                        debug_assert_eq!(new_node, node.last_child().unwrap());
+                        queue.push_back(new_node);
                     }
-                    duplicates_checker.insert(borrowed_node.id.clone());
-
-                    let new_node = node.create_as_last_child(&grant, child);
-                    debug_assert_eq!(new_node, node.last_child().unwrap());
-                    queue.push_back(new_node);
                 }
             }
         }
 
         Ok(())
     }
-
     /// Given a `Vec` of `Block`s (call these `Block`s "roots") that have been updated recently,
     /// return a `Tree`-like representation of each each root and its descendants by recursively
     /// fetching the children of each root, and the children of those children, etc...
@@ -265,15 +265,14 @@ impl Notion {
     pub async fn expand_block_roots(
         &self,
         block_roots: Vec<Block>,
+        duplicates_checker: &mut HashSet<BlockID>,
     ) -> Result<Vec<Tree<Block>>, NotionClientError> {
         let mut expanded_roots = Vec::new();
-        let mut duplicates_checker: HashSet<BlockID> = HashSet::new();
         for block in block_roots {
             let root = Node::new_tree(block);
             expanded_roots.push(root.tree());
 
-            self.expand_block_root(root, &mut duplicates_checker)
-                .await?;
+            self.expand_block_root(root, duplicates_checker).await?;
         }
 
         Ok(expanded_roots)

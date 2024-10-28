@@ -1,6 +1,6 @@
 use super::datatypes::Block;
 use dendron::{traverse::DftEvent, Tree};
-use log::debug;
+use log::{debug, trace};
 
 fn build_markdown_from_tree(tree: Tree<Block>, markdown: &mut String) {
     let mut depth = 0;
@@ -25,10 +25,10 @@ fn build_markdown_from_tree(tree: Tree<Block>, markdown: &mut String) {
                 depth += 1;
 
                 let block = evt.as_value().borrow_data();
-                debug!(
+                trace!(
                     target: "helpers",
-                    "{:?}",
-                    (&block.id, block.text.clone().truncate(10), &block.page_id)
+                    "DftEvent::Open {:?}",
+                    (&block.id, &block.page_id, &block.text)
                 );
                 let tabs = "\t".repeat(depth);
                 markdown.push_str(&format!("{}{}\n", tabs, block.to_markdown()));

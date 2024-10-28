@@ -1,7 +1,10 @@
 use chrono::{Duration, Utc};
 use dotenv::dotenv;
 use dross::{
-    core::{datatypes::Block, helpers::build_markdown_from_trees},
+    core::{
+        datatypes::{Block, BlockID},
+        helpers::build_markdown_from_trees,
+    },
     notion::Notion,
 };
 use log::{debug, info, trace};
@@ -14,10 +17,10 @@ async fn main() {
 
     let dur: Duration = Duration::hours(match env::var("RUST_LOG") {
         Ok(log_level) => match log_level.to_lowercase().as_str() {
-            "debug" | "trace" => 1,
-            _ => 1,
+            "debug" | "trace" => 2,
+            _ => 2,
         },
-        Err(_) => 1,
+        Err(_) => 2,
     }); // TODO, make this a CLI arg, for now we're just differentiating
         // between DEBUG and non-debug to speed iterating on debugging
 
@@ -53,9 +56,13 @@ async fn main() {
     trace!(target: "notion", "the pages and block roots look like:\n{:#?}", pages_and_block_roots.iter().map(|(p, br)| (&p.title, br.iter().map(|b| (b.id.clone(), b.text.clone())).collect::<Vec<_>>())).collect::<Vec<_>>());
 
     let mut every_prompt_markdown = Vec::new();
+    let mut duplicates_checker: HashSet<BlockID> = HashSet::new();
     for (page, block_roots) in pages_and_block_roots {
         info!(target: "notion", "expanding {} block roots for page: {}", block_roots.len(), page.title);
-        let trees = notion.expand_block_roots(block_roots).await.unwrap();
+        let trees = notion
+            .expand_block_roots(block_roots, &mut duplicates_checker)
+            .await
+            .unwrap();
 
         let single_page_prompt_markdown = build_markdown_from_trees(trees);
         every_prompt_markdown.push(format!(
