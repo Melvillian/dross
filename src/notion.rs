@@ -227,7 +227,7 @@ impl Notion {
                         // and stop it at its source. However, I'm following make it work, make it right, make it fast,
                         // and this is a simple way to prevent duplicates from being added to the tree.
                         continue;
-                    } else {
+                    } else if !child.is_empty() {
                         let new_node = node.create_as_last_child(&grant, child);
                         debug_assert_eq!(new_node, node.last_child().unwrap());
                         queue.push_back(new_node);
