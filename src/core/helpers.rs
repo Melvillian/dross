@@ -2,10 +2,32 @@ use super::datatypes::Block;
 use dendron::{traverse::DftEvent, Tree};
 use log::{debug, trace};
 
+/// Builds Markdown text containing notes that have been edited recently
+///
+/// It will result in  a markdown file that looks like this:
+///
+/// ```markdown
+/// Page Title: Fix lack of numbering with numbered lists
+/// ## Problem
+/// Currently the markdown output looks like:
+/// But we want it to look like:
+///
+/// Page Title: Finish All 4 parts of Elliptic Curve Blog Post
+/// First Blog Post:  https://andrea.corbellini.name/2015/05/17/elliptic-curve-cryptography-a-gentle-introduction/#comments
+///
+/// Page Title: Sprint 22
+/// ### Planning notes
+/// 	- Team availability
+/// 		- PTOs
+/// 	- Last sprint review
+/// 		- What went well
+/// 		- What could have gone differently
+/// 	- Sprint planning
+/// 		- Current sprint goal
+/// 		- Commit tasks to sprint
+/// ```
 fn build_markdown_from_tree(tree: Tree<Block>, markdown: &mut String) {
     let mut depth = 0;
-
-    let mut duplicates = std::collections::HashSet::new();
 
     debug!(
         target: "helpers",
@@ -32,21 +54,6 @@ fn build_markdown_from_tree(tree: Tree<Block>, markdown: &mut String) {
                 );
                 let tabs = "\t".repeat(depth);
                 markdown.push_str(&format!("{}{}\n", tabs, block.to_markdown()));
-                // TODO get rid of these duplicate checkers after figuring out where the
-                // duplicates are
-                let id = block.id.clone();
-                if duplicates.contains(&id) {
-                    debug!(
-                        target: "dendron",
-                        "markdown prior to duplicate panic:\n{}", markdown
-                    );
-                    panic!(
-                        "uhoh, find duplicate block {} with text {}",
-                        block.id, block.text
-                    );
-                } else {
-                    duplicates.insert(id);
-                }
             }
         }
     }
@@ -94,22 +101,4 @@ pub fn build_markdown_from_trees(trees: Vec<Tree<Block>>) -> String {
     }
 
     markdown
-}
-
-#[cfg(test)]
-mod tests {
-    use dendron::{tree_node, Node};
-
-    use super::*;
-
-    fn fake_tree_for_markdown_building() -> Vec<Tree<Block>> {
-        let root1: Tree<Block> = (tree_node! {
-          serde_json::from_str(r#"{"block_type":{"paragraph":{"color":"default","rich_text":[{"annotations":{"bold":false,"code":false,"color":"default","italic":false,"strikethrough":false,"underline":false},"plain_text":"11:14: Plan For day:","text":{"content":"11:14: Plan For day:"},"type":"text"}]},"type":"paragraph"},"creation_date":"2024-10-05T15:14:00Z","has_children":true,"id":"1164f233-166c-8100-a937-f753bc111dba","page_id":"1164f233-166c-80f1-88d0-c68546042265","parent_block_id":null,"text":"11:14: Plan For day:","update_date":"2024-10-06T18:51:00Z"}"#).unwrap()
-        }).tree();
-
-        vec![root1]
-    }
-
-    #[test]
-    fn test_build_markdown_from_trees() {}
 }

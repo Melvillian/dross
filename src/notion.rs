@@ -29,6 +29,10 @@ impl Notion {
         }
     }
 
+    /// Returns all `Page`s in the Notion integration's workspace that have been edited since the cutoff date.
+    /// The `Page`s will be ordered by last edited date in descending order.
+    ///
+    /// Note: we purposefully ignore Databases here, so that Navi can be simple and focus on notetaking `Page`s.
     pub async fn get_last_edited_pages(
         &self,
         cutoff: DateTime<Utc>,
@@ -49,14 +53,11 @@ impl Notion {
             .page_size(100);
 
         loop {
-            // paging
+            // this cursor is for request pagination
             if let Some(cursor) = current_cursor {
                 req_builder.start_cursor(cursor);
             }
 
-            // Send request
-            // TODO might be able to use retrieve_page_property api here and get only last_edited, id, and title, which would
-            // conserve bandwidth
             let res = self
                 .client
                 .search
@@ -73,10 +74,7 @@ impl Notion {
                     PageOrDatabase::Database(_) => None, // TODO: support databases
                 })
                 .collect::<Vec<NotionPage>>();
-            if current_notion_pages.len() != res_len {
-                // TODO improve error handling
-                panic!("something other than a page was found in returned info. res_len: {res_len} currentpages.len(): {}", current_notion_pages.len());
-            }
+            debug_assert!(current_notion_pages.len() != res_len, "something other than a page was found in returned info. res_len: {} current_notion_pages.len(): {}", res_len, current_notion_pages.len());
 
             // we only care about pages edited after the cutoff, so we need to
             // cut out the Pages that were edited prior to the cutoff
@@ -92,6 +90,8 @@ impl Notion {
                 pages.push(page);
             }
 
+            // here we've either ran out of pages in the workspace, or found all the pages that were edited after the cutoff,
+            // so we exit the loop
             if !res.has_more || cutoff_index.is_some() {
                 break;
             }
@@ -100,11 +100,11 @@ impl Notion {
         Ok(pages)
     }
 
-    /// For a given Notion `Page`, retrieve all of its non-empty children, grandchildren, etc... `Block`s that were edited within the specified duration.
+    /// For a given `Page`, retrieve all of its non-empty children, grandchildren, etc... `Block`s that were edited within the specified duration.
     ///
     /// Uses breadth-first-search to recursively fetch all the `Block` descendants of the `Page`.
     ///
-    /// Note: we do not include the `Page` `Block` as a block root, because then the content of every single `Page` that
+    /// Note: we do not include the `Page` itself as a block root, because then the content of every single `Page` that
     /// was updated within the duration would be included (that's a ton!), when all we want is the individual
     /// `Block`s within that `Page` that were updated within the duration.
     ///
@@ -123,13 +123,13 @@ impl Notion {
         // some user's Pages are huuuge, so long that we don't know if we'll spend too much time
         // much time fetching all their children. So, as a heuristic for when to abort we use
         // a fixed time (time_to_spend_fetching_children) after which we abort and use whichever
-        // block roots (if any) we have
+        // block roots (if any) we've built up so far
         let time_to_spend_fetching_children = Duration::seconds(30);
         let abort_time = Utc::now() + time_to_spend_fetching_children;
 
         while let Some(block) = blocks_to_process.pop_front() {
             if Utc::now() > abort_time {
-                // we've spent too much time fetching children, so stop recursing and reeturn
+                // we've spent too much time fetching children, so stop recursing and return
                 // the (truncated) block roots that we have. This means we may miss out on
                 // important blocks that were updated since the cutoff, but that's the price
                 // we pay in order to limit the time we spend fetching block children.
@@ -139,7 +139,7 @@ impl Notion {
 
             // traversing blocks in Notion is a complicated process, so complicated that we
             // don't know if there are cycles and we're going to get stuck in an infinite loop.
-            // To prevent that, we check for duplicates and skip them, which also breaks the loop
+            // To prevent that, we check for duplicates and skip them, preventing any infinite loops
             if duplicates_checker.contains(&block) {
                 trace!(
                     target: "notion",
@@ -151,7 +151,7 @@ impl Notion {
             duplicates_checker.insert(block.clone());
             trace!(target: "notion", "duplicates_checker.insert({})", &block.id);
 
-            // was the Block last edited within our cutoff duration?
+            // was the block updated recently enough that we should include it in the results?
             if block.update_date >= cutoff {
                 if !block.is_empty() {
                     block_roots.push(block.clone());
@@ -170,7 +170,7 @@ impl Notion {
                     .await?;
 
                 for child_block in children {
-                    trace!(target: "notion", "get_page_block_roots::fetched child block: (id: {}, text: {:?})", &child_block.id, &child_block.text);
+                    trace!(target: "notion", "fetched child block: (id: {}, text: {:?})", &child_block.id, &child_block.text);
                     // keep recursing down the tree of children blocks
                     blocks_to_process.push_back(child_block.clone());
                 }
@@ -183,51 +183,55 @@ impl Notion {
         Ok(block_roots)
     }
 
+    /// Given a Block that has been recently edited, return a Tree whose root is the
+    /// given Block, whose next level is the children of the given Block, and so on
+    /// until there are no more descendants. This Tree contains all the notes that
+    /// are relevant to the last duration's worth of notetaking.
+    ///
+    /// Note: while the given Block has been edited recently, there is no guarantee
+    /// that the descendants of the given Block have been edited recently.
     async fn expand_block_root(
         &self,
         block_root: Node<Block>,
-        duplicates_checker: &mut HashSet<BlockID>,
+        duplicates_checker: &mut HashSet<Block>,
     ) -> Result<(), NotionClientError> {
         let mut queue = VecDeque::from(vec![block_root]);
 
         while let Some(node) = queue.pop_front() {
-            debug!(target: "notion", "contents of duplicates_checker: {:#?}", duplicates_checker);
             let grant = node.tree().grant_hierarchy_edit().unwrap();
             let borrowed_node = node.borrow_data();
             debug!(target: "notion", "borrowed_node: {:?}", (&borrowed_node.id, &borrowed_node.text));
 
-            debug!(target: "notion", "duplicates_checker.contains({}) == {}", &borrowed_node.id, duplicates_checker.contains(&borrowed_node.id));
-            if duplicates_checker.contains(&borrowed_node.id) {
-                debug!(target: "notion", "already visited this block {:?}, skipping it...", (&borrowed_node.id, &borrowed_node.text));
+            if duplicates_checker.contains(&borrowed_node) {
+                trace!(target: "notion", "already visited this block {:?}, skipping it...", (&borrowed_node.id, &borrowed_node.text));
                 // Note: this is kind of a hack, because I'm seeing duplicate blocks from a single block root,
                 // and the solution here is it just skips over the duplicate, which is not ideal.
                 // In the future we should figure out what's going on here and actually do it right, but I'm
                 // following make it work, make it right, make it fast, and I'm still trying to make it work.
                 continue;
             }
-            debug!(target: "notion", "inserting block {:?} into duplicates_checker", &borrowed_node.id);
-            duplicates_checker.insert(borrowed_node.id.clone());
+            duplicates_checker.insert(borrowed_node.clone());
 
             if borrowed_node.has_children {
                 trace!(target: "notion", "block with id {} has children, fetching them...", &borrowed_node.id);
 
-                // TODO: figure out how to make this more efficient by not cloning
-                let page_id = borrowed_node.page_id.clone();
-                let block_id = borrowed_node.id.clone();
-
                 let children = self
-                    .retrieve_all_block_children(&block_id, &page_id)
+                    .retrieve_all_block_children(&borrowed_node.id, &borrowed_node.page_id)
                     .await?;
                 for child in children {
                     debug!(target: "notion", "child: {:?}", (&child.id, &child.text));
-                    if duplicates_checker.contains(&child.id) {
-                        debug!(target: "notion", "already visited this child block {:?}, skipping it...", (&child.id, &child.text));
+                    if duplicates_checker.contains(&child) {
+                        trace!(target: "notion", "already visited this child block {:?}, skipping it...", (&child.id, &child.text));
 
                         // Note: this is kind of a hack, because I should diagnose why we're seeing duplicate blocks
                         // and stop it at its source. However, I'm following make it work, make it right, make it fast,
                         // and this is a simple way to prevent duplicates from being added to the tree.
                         continue;
                     } else if !child.is_empty() {
+                        // here is where we actually add the Block to the Tree. We add Blocks to the Tree
+                        // in this children-fetching codeblock instead of at the beginning of the while
+                        // loop simply because the block_root is already in the Tree, and we don't want
+                        // to double add it
                         let new_node = node.create_as_last_child(&grant, child);
                         debug_assert_eq!(new_node, node.last_child().unwrap());
                         queue.push_back(new_node);
@@ -239,8 +243,9 @@ impl Notion {
         Ok(())
     }
     /// Given a `Vec` of `Block`s (call these `Block`s "roots") that have been updated recently,
-    /// return a `Tree`-like representation of each each root and its descendants by recursively
-    /// fetching the children of each root, and the children of those children, etc...
+    /// return a `Vec` of `Tree`'s where each `Tree` contains the `Block` root and all of its descendants.
+    /// We do this by recursively fetching the children of each root, and the children of those
+    /// children, etc...
     ///
     /// The goal here is to create a tree structure that mimics of nested structure of a page
     /// notes, where the nesting is achieved by indenting the text of each block under its parent.
@@ -265,7 +270,7 @@ impl Notion {
     pub async fn expand_block_roots(
         &self,
         block_roots: Vec<Block>,
-        duplicates_checker: &mut HashSet<BlockID>,
+        duplicates_checker: &mut HashSet<Block>,
     ) -> Result<Vec<Tree<Block>>, NotionClientError> {
         let mut expanded_roots = Vec::new();
         for block in block_roots {
@@ -278,10 +283,10 @@ impl Notion {
         Ok(expanded_roots)
     }
 
-    /// Retrieves all of the children (potentially multiple pages worth) of a Block with the given ID.
+    /// Retrieves all of the children Blocks of a Block with the given ID.
     ///
     /// Notion's API only allows for retrieving 100 children at a time, so this
-    /// function exists to paginate through the results and return them all at once.
+    /// function exists to paginate through the results and return them as a single Vec.
     pub async fn retrieve_all_block_children(
         &self,
         block_id: &BlockID,
@@ -334,7 +339,7 @@ impl Notion {
         Ok(children_blocks)
     }
 
-    /// Converts a Notion page to a Dross page.
+    /// Converts a Notion Page to a Dross Page.
     ///
     /// Note that the title extraction is a bit hacky and may not work for every page title, but it's good enough for getting the gist of what the page is called.
     async fn notion_page_to_dross_page(

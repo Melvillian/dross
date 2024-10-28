@@ -4,6 +4,8 @@ use notion_client::objects::block::{Block as NotionBlock, BlockType};
 use notion_client::objects::parent::Parent;
 use serde::{Deserialize, Serialize};
 
+/// The identifier for a Notion `Page`. This exists to distinguish
+/// between `Page` and `Block` identifiers at compile-time.
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Hash, Display, Deref)]
 pub struct PageID(String);
 
@@ -14,6 +16,8 @@ impl PageID {
     }
 }
 
+/// The identifier for a Notion `Block`. This exists to distinguish
+/// between `Block` and `Page` identifiers at compile-time.
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Hash, Display, Deref)]
 pub struct BlockID(String);
 
@@ -24,6 +28,13 @@ impl BlockID {
     }
 }
 
+/// A Block represents a single unit of notetaking, and its structure is heavily borrowed
+/// from the Notion API's [Block object](https://developers.notion.com/reference/block).
+///
+/// A Block is always contained within a Page. Its content is defined by the `block_type` field,
+/// but a plain form of the Block's text is stored in the `text` field. Finally, a Block
+/// can have children, but if you want to fetch them then you must use the
+/// notion::retrieve_all_block_children function with this Block's ID
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 pub struct Block {
     pub id: BlockID,
@@ -97,6 +108,12 @@ impl Block {
     }
 }
 
+/// A Page is a container for Blocks, and its structure is heavily borrowed
+/// from the Notion API's [Page object](https://developers.notion.com/reference/page).
+///
+/// The Page struct exists because the data sources (such as Notion) that we ingest
+/// from all have the concept of a collection of Blocks, and provide APIs for fetching
+/// recently edited collections of Blocks. We call those Pages.
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 pub struct Page {
     pub id: PageID,

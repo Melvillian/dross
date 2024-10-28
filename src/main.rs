@@ -1,13 +1,11 @@
 use chrono::{Duration, Utc};
 use dotenv::dotenv;
 use dross::{
-    core::{
-        datatypes::{Block, BlockID},
-        helpers::build_markdown_from_trees,
-    },
+    core::{datatypes::Block, helpers::build_markdown_from_trees},
     notion::Notion,
 };
 use log::{debug, info, trace};
+use notion_client::NotionClientError;
 use std::{collections::HashSet, env};
 
 #[tokio::main]
@@ -15,19 +13,23 @@ async fn main() {
     dotenv().ok();
     env_logger::init();
 
-    let dur: Duration = Duration::hours(match env::var("RUST_LOG") {
+    // TODO, make this a CLI arg, for now we're just differentiating
+    // between DEBUG and non-debug to speed iterating on debugging
+    let dur: Duration = Duration::days(match env::var("RUST_LOG") {
         Ok(log_level) => match log_level.to_lowercase().as_str() {
-            "debug" | "trace" => 2,
-            _ => 2,
+            "debug" | "trace" => 1,
+            _ => 7,
         },
-        Err(_) => 2,
-    }); // TODO, make this a CLI arg, for now we're just differentiating
-        // between DEBUG and non-debug to speed iterating on debugging
+        Err(_) => 7,
+    });
 
-    // ingest notes data from Notion
-    let notion_token: String = env::var("NOTION_TOKEN").expect("NOTION_TOKEN must be set");
-    let notion = Notion::new(notion_token).unwrap();
+    let notion = Notion::new(env::var("NOTION_TOKEN").expect("NOTION_TOKEN must be set")).unwrap();
 
+    let prompt_info = ingest_notion(notion, dur).await.unwrap();
+    info!(target: "notion", "prompt info:\n{}", prompt_info);
+}
+
+async fn ingest_notion(notion: Notion, dur: Duration) -> Result<String, NotionClientError> {
     let cutoff = Utc::now() - dur;
 
     let pages_edited_after_cutoff_date = notion.get_last_edited_pages(cutoff).await.unwrap();
@@ -47,7 +49,7 @@ async fn main() {
             .unwrap();
 
         if new_block_roots.len() > 0 {
-            info!(target: "notion", "found {} new block roots for page: {}",  new_block_roots.len(), page.title);
+            debug!(target: "notion", "found {} new block roots for page: {}",  new_block_roots.len(), page.title);
             pages_and_block_roots.push((page, new_block_roots));
         }
     }
@@ -56,9 +58,9 @@ async fn main() {
     trace!(target: "notion", "the pages and block roots look like:\n{:#?}", pages_and_block_roots.iter().map(|(p, br)| (&p.title, br.iter().map(|b| (b.id.clone(), b.text.clone())).collect::<Vec<_>>())).collect::<Vec<_>>());
 
     let mut every_prompt_markdown = Vec::new();
-    let mut duplicates_checker: HashSet<BlockID> = HashSet::new();
+    let mut duplicates_checker: HashSet<Block> = HashSet::new();
     for (page, block_roots) in pages_and_block_roots {
-        info!(target: "notion", "expanding {} block roots for page: {}", block_roots.len(), page.title);
+        debug!(target: "notion", "expanding {} block roots for page: {}", block_roots.len(), page.title);
         let trees = notion
             .expand_block_roots(block_roots, &mut duplicates_checker)
             .await
@@ -70,8 +72,6 @@ async fn main() {
             page.title, single_page_prompt_markdown
         ));
     }
-    let prompt_info = every_prompt_markdown.join("\n\n");
-    info!(target: "notion", "prompt info:\n{}", prompt_info);
 
-    info!(target: "notion", "notion page ingestion successful");
+    return Ok(every_prompt_markdown.join("\n\n"));
 }
