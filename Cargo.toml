@@ -1,5 +1,5 @@
 [package]
-name = "dross"
+name = "navi"
 authors = ["Alex Melville"]
 version = "0.1.0"
 edition = "2021"

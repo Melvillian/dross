@@ -86,7 +86,7 @@ impl Notion {
             }
 
             for notion_page in current_notion_pages {
-                let page = self.notion_page_to_dross_page(notion_page).await?;
+                let page = self.notion_page_to_navi_page(notion_page).await?;
                 pages.push(page);
             }
 
@@ -339,10 +339,10 @@ impl Notion {
         Ok(children_blocks)
     }
 
-    /// Converts a Notion Page to a Dross Page.
+    /// Converts a Notion Page to a Navi Page.
     ///
     /// Note that the title extraction is a bit hacky and may not work for every page title, but it's good enough for getting the gist of what the page is called.
-    async fn notion_page_to_dross_page(
+    async fn notion_page_to_navi_page(
         &self,
         notion_page: NotionPage,
     ) -> Result<Page, NotionClientError> {
