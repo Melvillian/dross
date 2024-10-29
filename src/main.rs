@@ -1,10 +1,10 @@
 use chrono::{Duration, Utc};
 use dotenv::dotenv;
-use dross::{
+use log::{debug, info, trace};
+use navi::{
     core::{datatypes::Block, helpers::build_markdown_from_trees},
     notion::Notion,
 };
-use log::{debug, info, trace};
 use notion_client::NotionClientError;
 use std::{collections::HashSet, env};
 
